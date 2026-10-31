@@ -7,7 +7,7 @@ use rnote_compose::penpath::Element;
 use rnote_engine::WidgetFlags;
 use rnote_engine::ext::EventPropagationExt;
 use rnote_engine::ext::GraphenePointExt;
-use rnote_engine::pens::PenMode;
+use rnote_engine::pens::{PenMode, PenStyle};
 use rnote_engine::pens::penholder::BacklogPolicy;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -205,6 +205,8 @@ pub(crate) fn handle_pointer_controller_event(
                 PenState::Up => {
                     canvas.enable_drawing_cursor(false);
 
+                    canvas.engine_mut().set_last_center_point(element.pos, Some("O".to_string()));
+
                     let (ep, wf) = canvas.engine_mut().handle_pen_event(
                         PenEvent::Up {
                             element,
@@ -262,6 +264,27 @@ pub(crate) fn handle_key_controller_key_pressed(
     canvas.grab_focus();
 
     let now = Instant::now();
+    let is_typewriter =
+        canvas.engine_ref().current_pen_style_w_override() == PenStyle::Typewriter;
+    if !is_typewriter
+        && !gdk_modifiers.contains(gdk::ModifierType::CONTROL_MASK)
+        && !gdk_modifiers.contains(gdk::ModifierType::ALT_MASK)
+    {
+        if let Some(appwindow) = canvas.root().and_then(|r| r.downcast::<crate::RnAppWindow>().ok()) {
+            let action_name = match gdk_key {
+                gdk::Key::l | gdk::Key::L => Some("win.shape-line"),
+                gdk::Key::r | gdk::Key::R => Some("win.shape-circle"),
+                gdk::Key::s | gdk::Key::S => Some("win.shape-square"),
+                gdk::Key::p | gdk::Key::P => Some("win.shape-point"),
+                _ => None,
+            };
+            if let Some(action) = action_name {
+                gtk4::gio::prelude::ActionGroupExt::activate_action(&appwindow, action, None);
+                return glib::Propagation::Stop;
+            }
+        }
+    }
+
     let keyboard_key = retrieve_keyboard_key(gdk_key);
     let modifier_keys = retrieve_modifier_keys(gdk_modifiers);
     let shortcut_key = retrieve_keyboard_shortcut_key(gdk_key, gdk_modifiers);

@@ -367,6 +367,77 @@ impl RnAppWindow {
         ));
 
         // Tab actions
+        let action_shape_line = gio::SimpleAction::new("shape-line", None);
+        self.add_action(&action_shape_line);
+        action_shape_line.connect_activate(clone!(
+            #[weak(rename_to=appwindow)]
+            self,
+            move |_, _| {
+                appwindow.set_pen_style(PenStyle::Shaper);
+                appwindow.overlays().penpicker().shaper_toggle().set_active(true);
+                appwindow.engine_config().write().pens_config.shaper_config.builder_type =
+                    rnote_compose::builders::ShapeBuilderType::MathLine;
+                if let Some(canvas) = appwindow.active_tab_canvas() {
+                    let mut flags = rnote_engine::WidgetFlags::default();
+                    flags.refresh_ui = true;
+                    appwindow.handle_widget_flags(flags, &canvas);
+                }
+            }
+        ));
+
+        let action_shape_circle = gio::SimpleAction::new("shape-circle", None);
+        self.add_action(&action_shape_circle);
+        action_shape_circle.connect_activate(clone!(
+            #[weak(rename_to=appwindow)]
+            self,
+            move |_, _| {
+                appwindow.set_pen_style(PenStyle::Shaper);
+                appwindow.overlays().penpicker().shaper_toggle().set_active(true);
+                appwindow.engine_config().write().pens_config.shaper_config.builder_type =
+                    rnote_compose::builders::ShapeBuilderType::MathCircle;
+                if let Some(canvas) = appwindow.active_tab_canvas() {
+                    let mut flags = rnote_engine::WidgetFlags::default();
+                    flags.refresh_ui = true;
+                    appwindow.handle_widget_flags(flags, &canvas);
+                }
+            }
+        ));
+
+        let action_shape_square = gio::SimpleAction::new("shape-square", None);
+        self.add_action(&action_shape_square);
+        action_shape_square.connect_activate(clone!(
+            #[weak(rename_to=appwindow)]
+            self,
+            move |_, _| {
+                appwindow.set_pen_style(PenStyle::Shaper);
+                appwindow.overlays().penpicker().shaper_toggle().set_active(true);
+                appwindow.engine_config().write().pens_config.shaper_config.builder_type =
+                    rnote_compose::builders::ShapeBuilderType::Rectangle;
+                if let Some(canvas) = appwindow.active_tab_canvas() {
+                    let mut flags = rnote_engine::WidgetFlags::default();
+                    flags.refresh_ui = true;
+                    appwindow.handle_widget_flags(flags, &canvas);
+                }
+            }
+        ));
+
+        let action_shape_point = gio::SimpleAction::new("shape-point", None);
+        self.add_action(&action_shape_point);
+        action_shape_point.connect_activate(clone!(
+            #[weak(rename_to=appwindow)]
+            self,
+            move |_, _| {
+                appwindow.set_pen_style(PenStyle::Shaper);
+                appwindow.overlays().penpicker().shaper_toggle().set_active(true);
+                appwindow.engine_config().write().pens_config.shaper_config.builder_type =
+                    rnote_compose::builders::ShapeBuilderType::MathPoint;
+                if let Some(canvas) = appwindow.active_tab_canvas() {
+                    let mut flags = rnote_engine::WidgetFlags::default();
+                    flags.refresh_ui = true;
+                    appwindow.handle_widget_flags(flags, &canvas);
+                }
+            }
+        ));
         action_active_tab_move_left.connect_activate(clone!(
             #[weak(rename_to=appwindow)]
             self,
@@ -1217,6 +1288,10 @@ impl RnAppWindow {
         app.set_accels_for_action("win.pen-style::eraser", &["<Ctrl>4", "<Ctrl>KP_4"]);
         app.set_accels_for_action("win.pen-style::selector", &["<Ctrl>5", "<Ctrl>KP_5"]);
         app.set_accels_for_action("win.pen-style::tools", &["<Ctrl>6", "<Ctrl>KP_6"]);
+        app.set_accels_for_action("win.shape-line", &["l", "L"]);
+        app.set_accels_for_action("win.shape-circle", &["r", "R"]);
+        app.set_accels_for_action("win.shape-square", &["s", "S"]);
+        app.set_accels_for_action("win.shape-point", &["p", "P"]);
         (1..=9).for_each(|i| {
             app.set_accels_for_action(
                 &format!("win.set-color-{i}"),

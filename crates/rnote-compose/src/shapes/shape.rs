@@ -35,6 +35,9 @@ pub enum Shape {
     /// A polygon shape.
     #[serde(rename = "polygon")]
     Polygon(Polygon),
+    /// A math geometric figure with constraints and exact constructions.
+    #[serde(rename = "mathfigure")]
+    MathFigure(crate::geometry::MathFigure),
 }
 
 impl Default for Shape {
@@ -70,6 +73,9 @@ impl Transformable for Shape {
             Self::Polygon(polygon) => {
                 polygon.translate(offset);
             }
+            Self::MathFigure(math_figure) => {
+                math_figure.translate(offset);
+            }
         }
     }
 
@@ -98,6 +104,9 @@ impl Transformable for Shape {
             }
             Self::Polygon(polygon) => {
                 polygon.rotate(angle, center);
+            }
+            Self::MathFigure(math_figure) => {
+                math_figure.rotate(angle, center);
             }
         }
     }
@@ -128,6 +137,9 @@ impl Transformable for Shape {
             Self::Polygon(polygon) => {
                 polygon.scale(scale);
             }
+            Self::MathFigure(math_figure) => {
+                math_figure.scale(scale);
+            }
         }
     }
 }
@@ -143,6 +155,7 @@ impl Shapeable for Shape {
             Self::CubicBezier(cubbez) => cubbez.bounds(),
             Self::Polyline(polyline) => polyline.bounds(),
             Self::Polygon(polygon) => polygon.bounds(),
+            Self::MathFigure(math_figure) => math_figure.bounds(),
         }
     }
 
@@ -156,6 +169,7 @@ impl Shapeable for Shape {
             Self::CubicBezier(cubbez) => cubbez.hitboxes(),
             Self::Polyline(polyline) => polyline.hitboxes(),
             Self::Polygon(polygon) => polygon.hitboxes(),
+            Self::MathFigure(math_figure) => math_figure.hitboxes(),
         }
     }
 
@@ -169,6 +183,7 @@ impl Shapeable for Shape {
             Self::CubicBezier(cubbez) => cubbez.outline_path(),
             Self::Polyline(polyline) => polyline.outline_path(),
             Self::Polygon(polygon) => polygon.outline_path(),
+            Self::MathFigure(math_figure) => math_figure.outline_path(),
         }
     }
 }

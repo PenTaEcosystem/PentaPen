@@ -24,6 +24,8 @@ pub struct WidgetFlags {
     pub hide_redo: Option<bool>,
     /// Changes whether text input in the UI toolkit should be enabled.
     pub enable_text_input: Option<bool>,
+    /// Request to open circle center settings in the UI.
+    pub open_circle_settings: bool,
 }
 
 impl Default for WidgetFlags {
@@ -40,6 +42,7 @@ impl Default for WidgetFlags {
             hide_undo: None,
             hide_redo: None,
             enable_text_input: None,
+            open_circle_settings: false,
         }
     }
 }
@@ -63,6 +66,7 @@ impl std::ops::BitOrAssign for WidgetFlags {
         self.zoomed_temporarily |= rhs.zoomed_temporarily;
         self.zoomed |= rhs.zoomed;
         self.deselect_color_setters |= rhs.deselect_color_setters;
+        self.open_circle_settings |= rhs.open_circle_settings;
         if rhs.hide_undo.is_some() {
             self.hide_undo = rhs.hide_undo
         }

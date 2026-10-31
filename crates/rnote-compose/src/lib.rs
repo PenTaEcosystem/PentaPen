@@ -21,6 +21,8 @@ pub mod penevent;
 pub mod penpath;
 /// utilities for serializing / deserializing
 pub mod serialize;
+/// module for geometric construction and constraint solving
+pub mod geometry;
 /// module for shapes
 pub mod shapes;
 /// module for splitorder
@@ -36,6 +38,7 @@ pub mod utils;
 pub use color::Color;
 pub use constraints::Constraints;
 pub use eventresult::EventResult;
+pub use geometry::MathFigure;
 pub use penevent::PenEvent;
 pub use penpath::PenPath;
 pub use shapes::Shape;

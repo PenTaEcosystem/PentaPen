@@ -385,6 +385,18 @@ impl RnAppWindow {
         if let Some(enable_text_input) = widget_flags.enable_text_input {
             canvas.enable_text_input(enable_text_input);
         }
+        if widget_flags.open_circle_settings {
+            self.set_pen_style(PenStyle::Shaper);
+            self.overlays().penpicker().shaper_toggle().set_active(true);
+            self.overlays()
+                .penssidebar()
+                .sidebar_stack()
+                .set_visible_child_name("shaper_page");
+            self.overlays()
+                .penssidebar()
+                .shaper_page()
+                .open_math_center_settings();
+        }
     }
 
     /// Get the active (selected) tab page.

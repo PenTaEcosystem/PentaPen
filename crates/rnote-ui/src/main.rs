@@ -7,6 +7,7 @@
 )]
 
 // Modules
+pub(crate) mod aimenu;
 pub(crate) mod app;
 pub(crate) mod appmenu;
 pub(crate) mod appwindow;
@@ -37,6 +38,8 @@ pub(crate) mod utils;
 pub(crate) mod workspacebrowser;
 
 // Re-exports
+#[allow(unused_imports)]
+pub(crate) use aimenu::RnAiMenu;
 pub(crate) use app::RnApp;
 pub(crate) use appmenu::RnAppMenu;
 pub(crate) use appwindow::RnAppWindow;

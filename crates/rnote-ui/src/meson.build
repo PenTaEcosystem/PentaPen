@@ -36,6 +36,7 @@ run_command(
 )
 
 rnote_ui_sources = files(
+    'aimenu.rs',
     'app/appactions.rs',
     'app/mod.rs',
     'appmenu.rs',

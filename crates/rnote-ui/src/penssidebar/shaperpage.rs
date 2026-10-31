@@ -66,6 +66,12 @@ mod imp {
         pub(crate) constraint_three_to_two_row: TemplateChild<adw::SwitchRow>,
         #[template_child]
         pub(crate) constraint_golden_row: TemplateChild<adw::SwitchRow>,
+        #[template_child]
+        pub(crate) math_center_label_row: TemplateChild<adw::EntryRow>,
+        #[template_child]
+        pub(crate) math_auto_intersections_row: TemplateChild<adw::SwitchRow>,
+        #[template_child]
+        pub(crate) math_show_centers_row: TemplateChild<adw::SwitchRow>,
 
         #[template_child]
         pub(crate) stroke_width_picker: TemplateChild<RnStrokeWidthPicker>,
@@ -189,9 +195,13 @@ impl RnShaperPage {
     }
 
     pub(crate) fn set_shapebuildertype(&self, builder_type: ShapeBuilderType) {
+        let icon_name = builder_type.to_icon_name();
         self.imp()
             .shapebuildertype_picker
-            .set_picked(Some(builder_type.to_icon_name()));
+            .set_picked(Some(icon_name.clone()));
+        self.imp()
+            .shapebuildertype_menubutton
+            .set_icon_name(&icon_name);
     }
 
     pub(crate) fn smoothstyle_line_cap(&self) -> LineCap {
@@ -217,6 +227,12 @@ impl RnShaperPage {
 
     pub(crate) fn stroke_width_picker(&self) -> RnStrokeWidthPicker {
         self.imp().stroke_width_picker.get()
+    }
+
+    pub(crate) fn open_math_center_settings(&self) {
+        let imp = self.imp();
+        imp.shapeconfig_popover.popup();
+        imp.math_center_label_row.grab_focus();
     }
 
     pub(crate) fn init(&self, appwindow: &RnAppWindow) {
@@ -587,6 +603,58 @@ impl RnShaperPage {
                     }
                 }
             ));
+
+        // Math Geometry Configuration
+        imp.math_center_label_row
+            .get()
+            .connect_changed(clone!(
+                #[weak]
+                appwindow,
+                move |row| {
+                    let text = row.text().to_string();
+                    let label = if text.trim().is_empty() {
+                        "O".to_string()
+                    } else {
+                        text.trim().to_string()
+                    };
+                    appwindow
+                        .engine_config()
+                        .write()
+                        .pens_config
+                        .shaper_config
+                        .math_center_label = label;
+                }
+            ));
+
+        imp.math_auto_intersections_row
+            .get()
+            .connect_active_notify(clone!(
+                #[weak]
+                appwindow,
+                move |row| {
+                    appwindow
+                        .engine_config()
+                        .write()
+                        .pens_config
+                        .shaper_config
+                        .math_auto_intersections = row.is_active();
+                }
+            ));
+
+        imp.math_show_centers_row
+            .get()
+            .connect_active_notify(clone!(
+                #[weak]
+                appwindow,
+                move |row| {
+                    appwindow
+                        .engine_config()
+                        .write()
+                        .pens_config
+                        .shaper_config
+                        .math_show_centers = row.is_active();
+                }
+            ));
     }
 
     pub(crate) fn refresh_ui(&self, appwindow: &RnAppWindow) {
@@ -653,11 +721,28 @@ impl RnShaperPage {
                 .ratios
                 .contains(&ConstraintRatio::Golden),
         );
+
+        // Math geometry settings
+        imp.math_center_label_row
+            .set_text(&shaper_config.math_center_label);
+        imp.math_auto_intersections_row
+            .set_active(shaper_config.math_auto_intersections);
+        imp.math_show_centers_row
+            .set_active(shaper_config.math_show_centers);
     }
 }
 
 fn shape_builder_type_icons_get_groups() -> Vec<GroupedIconPickerGroupData> {
     vec![
+        GroupedIconPickerGroupData {
+            name: gettext("Math and Geometry"),
+            icons: StringList::new(&[
+                "shapebuilder-mathtriangle-symbolic",
+                "shapebuilder-mathcircle-symbolic",
+                "shapebuilder-mathline-symbolic",
+                "shapebuilder-mathpoint-symbolic",
+            ]),
+        },
         GroupedIconPickerGroupData {
             name: gettext("Miscellaneous"),
             icons: StringList::new(&[
@@ -711,5 +796,9 @@ fn shape_builder_type_icons_to_display_name(icon_name: &str) -> String {
         ShapeBuilderType::CubBez => gettext("Cubic bezier curve"),
         ShapeBuilderType::Polyline => gettext("Polyline"),
         ShapeBuilderType::Polygon => gettext("Polygon"),
+        ShapeBuilderType::MathTriangle => gettext("Math Triangle"),
+        ShapeBuilderType::MathCircle => gettext("Math Circle (with Center)"),
+        ShapeBuilderType::MathLine => gettext("Math Line / Segment"),
+        ShapeBuilderType::MathPoint => gettext("Point (Chấm điểm)"),
     }
 }

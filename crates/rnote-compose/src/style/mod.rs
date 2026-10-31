@@ -292,6 +292,7 @@ impl Composer<Style> for Shape {
             Shape::CubicBezier(cubic_bezier) => cubic_bezier.composed_bounds(options),
             Shape::Polyline(polyline) => polyline.composed_bounds(options),
             Shape::Polygon(polygon) => polygon.composed_bounds(options),
+            Shape::MathFigure(math_figure) => math_figure.composed_bounds(options),
         }
     }
 
@@ -305,6 +306,7 @@ impl Composer<Style> for Shape {
             Shape::CubicBezier(cubic_bezier) => cubic_bezier.draw_composed(cx, options),
             Shape::Polyline(polyline) => polyline.draw_composed(cx, options),
             Shape::Polygon(polygon) => polygon.draw_composed(cx, options),
+            Shape::MathFigure(math_figure) => math_figure.draw_composed(cx, options),
         }
     }
 }

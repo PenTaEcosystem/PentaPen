@@ -380,6 +380,7 @@ impl Composer<SmoothOptions> for crate::Shape {
             crate::Shape::CubicBezier(cubbez) => cubbez.composed_bounds(options),
             crate::Shape::Polyline(polyline) => polyline.composed_bounds(options),
             crate::Shape::Polygon(polygon) => polygon.composed_bounds(options),
+            crate::Shape::MathFigure(math_figure) => math_figure.composed_bounds(options),
         }
     }
 
@@ -393,6 +394,7 @@ impl Composer<SmoothOptions> for crate::Shape {
             crate::Shape::CubicBezier(cubbez) => cubbez.draw_composed(cx, options),
             crate::Shape::Polyline(polyline) => polyline.draw_composed(cx, options),
             crate::Shape::Polygon(polygon) => polygon.draw_composed(cx, options),
+            crate::Shape::MathFigure(math_figure) => math_figure.draw_composed(cx, options),
         }
     }
 }

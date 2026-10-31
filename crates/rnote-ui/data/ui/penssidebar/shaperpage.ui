@@ -23,7 +23,7 @@
               <object class="GtkToggleButton">
                 <child>
                   <object class="GtkImage">
-                    <property name="icon-name">shapebuilder-line-symbolic</property>
+                    <property name="icon-name">shapebuilder-mathtriangle-symbolic</property>
                     <property name="icon-size">large</property>
                   </object>
                 </child>
@@ -117,6 +117,32 @@
                     <class name="flat" />
                     <class name="circular" />
                   </style>
+                </object>
+              </child>
+            </object>
+          </child>
+          <!-- Math & Geometry Configuration -->
+          <child>
+            <object class="AdwPreferencesGroup">
+              <property name="title" translatable="yes">Math and Geometry</property>
+              <child>
+                <object class="AdwEntryRow" id="math_center_label_row">
+                  <property name="title" translatable="yes">Center / Point Label</property>
+                  <property name="text">O</property>
+                </object>
+              </child>
+              <child>
+                <object class="AdwSwitchRow" id="math_auto_intersections_row">
+                  <property name="title" translatable="yes">Auto Intersections</property>
+                  <property name="subtitle" translatable="yes">Automatically detect and mark intersection points</property>
+                  <property name="active">true</property>
+                </object>
+              </child>
+              <child>
+                <object class="AdwSwitchRow" id="math_show_centers_row">
+                  <property name="title" translatable="yes">Show Classical Centers</property>
+                  <property name="subtitle" translatable="yes">Display Orthocenter (H), Centroid (G), etc.</property>
+                  <property name="active">true</property>
                 </object>
               </child>
             </object>

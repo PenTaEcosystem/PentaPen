@@ -55,6 +55,20 @@ pub struct ShaperConfig {
     pub highlight_opacity: f64,
     #[serde(rename = "constraints")]
     pub constraints: Constraints,
+    #[serde(default = "default_math_center_label", rename = "math_center_label")]
+    pub math_center_label: String,
+    #[serde(default = "default_true", rename = "math_auto_intersections")]
+    pub math_auto_intersections: bool,
+    #[serde(default = "default_true", rename = "math_show_centers")]
+    pub math_show_centers: bool,
+}
+
+fn default_math_center_label() -> String {
+    String::from("O")
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for ShaperConfig {
@@ -72,6 +86,9 @@ impl Default for ShaperConfig {
             highlight_mode: false,
             highlight_opacity: 0.45,
             constraints,
+            math_center_label: String::from("O"),
+            math_auto_intersections: true,
+            math_show_centers: true,
         }
     }
 }
@@ -115,6 +132,21 @@ impl ShaperConfig {
                     }
                 }
                 Style::Rough(options)
+            }
+        }
+    }
+
+    /// Advance point label to next letter if it's a single ASCII uppercase letter (A -> B -> C...)
+    pub fn advance_point_label(&mut self) {
+        if self.math_center_label.len() == 1 {
+            let c = self.math_center_label.chars().next().unwrap();
+            if c.is_ascii_uppercase() {
+                if c == 'Z' {
+                    self.math_center_label = "A".to_string();
+                } else {
+                    let next = (c as u8 + 1) as char;
+                    self.math_center_label = next.to_string();
+                }
             }
         }
     }

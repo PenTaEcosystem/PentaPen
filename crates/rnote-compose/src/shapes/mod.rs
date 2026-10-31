@@ -5,6 +5,8 @@ pub mod arrow;
 pub mod cubbez;
 /// Ellipse
 pub mod ellipse;
+/// Geometric snap and intersections
+pub mod geometry_snap;
 /// Line
 pub mod line;
 /// Polygon
@@ -24,6 +26,7 @@ pub mod shapeable;
 pub use arrow::Arrow;
 pub use cubbez::CubicBezier;
 pub use ellipse::Ellipse;
+pub use geometry_snap::*;
 pub use line::Line;
 pub use polygon::Polygon;
 pub use polyline::Polyline;

@@ -214,6 +214,9 @@ pub struct Engine {
     #[cfg(feature = "ui")]
     #[serde(skip)]
     origin_indicator_rendernode: Option<gtk4::gsk::RenderNode>,
+    /// Last center point dotted or clicked on canvas, for AI geometry construction
+    #[serde(skip)]
+    pub last_center_point: Option<(p2d::math::Vector2, Option<String>)>,
 }
 
 impl Default for Engine {
@@ -238,12 +241,23 @@ impl Default for Engine {
             origin_indicator_image: None,
             #[cfg(feature = "ui")]
             origin_indicator_rendernode: None,
+            last_center_point: None,
         }
     }
 }
 
 impl Engine {
     pub(crate) const STROKE_BOUNDS_INTERSECTION_TOLERANCE: f64 = 1e-3;
+
+    /// Get last center point dotted or clicked on canvas
+    pub fn last_center_point(&self) -> Option<(p2d::math::Vector2, Option<String>)> {
+        self.last_center_point.clone()
+    }
+
+    /// Set last center point dotted or clicked on canvas
+    pub fn set_last_center_point(&mut self, pos: p2d::math::Vector2, label: Option<String>) {
+        self.last_center_point = Some((pos, label));
+    }
 
     pub fn install_config(
         &mut self,
@@ -909,5 +923,29 @@ impl Engine {
     pub fn current_pen_style_w_override(&self) -> PenStyle {
         self.penholder
             .current_pen_style_w_override(&engine_view!(self))
+    }
+
+    /// Insert a shape stroke into the store and regenerate its rendering.
+    pub fn insert_shape(&mut self, shape: rnote_compose::Shape) -> WidgetFlags {
+        let style = self
+            .config
+            .read()
+            .pens_config
+            .shaper_config
+            .gen_style_for_current_options();
+        let key = self.store.insert_stroke(
+            crate::strokes::Stroke::ShapeStroke(crate::strokes::ShapeStroke::new(shape, style)),
+            None,
+        );
+        self.store.update_geometry_for_strokes(&[key]);
+        self.store.regenerate_rendering_for_stroke(
+            key,
+            self.camera.viewport(),
+            self.camera.image_scale(),
+        );
+        let mut widget_flags = self.record(std::time::Instant::now());
+        widget_flags.store_modified = true;
+        widget_flags.redraw = true;
+        widget_flags
     }
 }

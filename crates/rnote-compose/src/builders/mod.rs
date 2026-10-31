@@ -9,6 +9,10 @@ mod ellipsebuilder;
 mod fociellipsebuilder;
 mod gridbuilder;
 mod linebuilder;
+mod mathcirclebuilder;
+mod mathlinebuilder;
+mod mathpointbuilder;
+mod mathtrianglebuilder;
 mod penpathcurvedbuilder;
 mod penpathmodeledbuilder;
 mod penpathsimplebuilder;
@@ -27,6 +31,10 @@ pub use ellipsebuilder::EllipseBuilder;
 pub use fociellipsebuilder::FociEllipseBuilder;
 pub use gridbuilder::GridBuilder;
 pub use linebuilder::LineBuilder;
+pub use mathcirclebuilder::MathCircleBuilder;
+pub use mathlinebuilder::MathLineBuilder;
+pub use mathpointbuilder::MathPointBuilder;
+pub use mathtrianglebuilder::MathTriangleBuilder;
 pub use penpathcurvedbuilder::PenPathCurvedBuilder;
 pub use penpathmodeledbuilder::PenPathModeledBuilder;
 pub use penpathsimplebuilder::PenPathSimpleBuilder;
@@ -46,6 +54,8 @@ use serde::{Deserialize, Serialize};
     Clone,
     Debug,
     Default,
+    PartialEq,
+    Eq,
     Serialize,
     Deserialize,
     num_derive::FromPrimitive,
@@ -53,10 +63,22 @@ use serde::{Deserialize, Serialize};
 )]
 #[serde(rename = "shapebuilder_type")]
 pub enum ShapeBuilderType {
-    /// A line builder
+    /// A math triangle builder with 4 classical centers
     #[default]
+    #[serde(rename = "math_triangle")]
+    MathTriangle = 0,
+    /// A math circle builder with center and label
+    #[serde(rename = "math_circle")]
+    MathCircle,
+    /// A math line builder with endpoints and snapping
+    #[serde(rename = "math_line")]
+    MathLine,
+    /// A math point builder for placing labeled points
+    #[serde(rename = "math_point")]
+    MathPoint,
+    /// A line builder
     #[serde(rename = "line")]
-    Line = 0,
+    Line,
     /// An arrow builder
     #[serde(rename = "arrow")]
     Arrow,
@@ -112,6 +134,16 @@ impl ShapeBuilderType {
             "shapebuilder-cubbez-symbolic" => Some(Self::CubBez),
             "shapebuilder-polyline-symbolic" => Some(Self::Polyline),
             "shapebuilder-polygon-symbolic" => Some(Self::Polygon),
+            "shapebuilder-mathtriangle-symbolic" | "shapebuilder-triangle-symbolic" => {
+                Some(Self::MathTriangle)
+            }
+            "shapebuilder-mathcircle-symbolic" | "shapebuilder-circle-symbolic" => {
+                Some(Self::MathCircle)
+            }
+            "shapebuilder-mathline-symbolic" => Some(Self::MathLine),
+            "shapebuilder-mathpoint-symbolic" | "shapebuilder-point-symbolic" => {
+                Some(Self::MathPoint)
+            }
             _ => None,
         }
     }
@@ -134,6 +166,10 @@ impl ShapeBuilderType {
             Self::CubBez => String::from("shapebuilder-cubbez-symbolic"),
             Self::Polyline => String::from("shapebuilder-polyline-symbolic"),
             Self::Polygon => String::from("shapebuilder-polygon-symbolic"),
+            Self::MathTriangle => String::from("shapebuilder-mathtriangle-symbolic"),
+            Self::MathCircle => String::from("shapebuilder-mathcircle-symbolic"),
+            Self::MathLine => String::from("shapebuilder-mathline-symbolic"),
+            Self::MathPoint => String::from("shapebuilder-mathpoint-symbolic"),
         }
     }
 }

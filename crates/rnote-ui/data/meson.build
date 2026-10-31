@@ -157,6 +157,7 @@ endif
 
 rnote_ui_gresources_icons_files = files(
     'icons/scalable/actions/add-page-symbolic.svg',
+    'icons/scalable/actions/ai-sparkle-symbolic.svg',
     'icons/scalable/actions/appwindow-fullscreen-symbolic.svg',
     'icons/scalable/actions/canvasmenu-symbolic.svg',
     'icons/scalable/actions/clipboard-copy-symbolic.svg',
@@ -252,6 +253,10 @@ rnote_ui_gresources_icons_files = files(
     'icons/scalable/actions/shapebuilder-fociellipse-symbolic.svg',
     'icons/scalable/actions/shapebuilder-grid-symbolic.svg',
     'icons/scalable/actions/shapebuilder-line-symbolic.svg',
+    'icons/scalable/actions/shapebuilder-mathcircle-symbolic.svg',
+    'icons/scalable/actions/shapebuilder-mathline-symbolic.svg',
+    'icons/scalable/actions/shapebuilder-mathpoint-symbolic.svg',
+    'icons/scalable/actions/shapebuilder-mathtriangle-symbolic.svg',
     'icons/scalable/actions/shapebuilder-polygon-symbolic.svg',
     'icons/scalable/actions/shapebuilder-polyline-symbolic.svg',
     'icons/scalable/actions/shapebuilder-quadbez-symbolic.svg',
@@ -339,6 +344,7 @@ rnote_ui_gresources_icons_files = files(
 )
 
 rnote_ui_gresources_ui_files = files(
+    'ui/aimenu.ui',
     'ui/appmenu.ui',
     'ui/appwindow.ui',
     'ui/canvasmenu.ui',

@@ -148,6 +148,111 @@
             </object>
           </child>
 
+          <!-- Center Management Card: Chấm tâm & Dựng hình theo tâm -->
+          <child>
+            <object class="GtkBox">
+              <property name="orientation">vertical</property>
+              <property name="spacing">4</property>
+              <style>
+                <class name="card" />
+              </style>
+              <property name="margin-top">2</property>
+              <property name="margin-bottom">2</property>
+              <child>
+                <object class="GtkBox">
+                  <property name="spacing">6</property>
+                  <property name="margin-start">8</property>
+                  <property name="margin-end">8</property>
+                  <property name="margin-top">6</property>
+                  <child>
+                    <object class="GtkLabel" id="center_status_label">
+                      <property name="hexpand">true</property>
+                      <property name="xalign">0</property>
+                      <property name="label">⚪ Chưa chọn tâm (Bấm 'Chấm tâm' để chọn)</property>
+                      <property name="use-markup">true</property>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkButton" id="clear_center_button">
+                      <property name="label">✖️</property>
+                      <property name="tooltip-text" translatable="yes">Bỏ chọn tâm</property>
+                      <style>
+                        <class name="flat" />
+                      </style>
+                    </object>
+                  </child>
+                </object>
+              </child>
+              <child>
+                <object class="GtkBox">
+                  <property name="spacing">6</property>
+                  <property name="margin-start">8</property>
+                  <property name="margin-end">8</property>
+                  <property name="margin-bottom">4</property>
+                  <child>
+                    <object class="GtkButton" id="pick_center_button">
+                      <property name="hexpand">true</property>
+                      <property name="label">🎯 Chấm tâm trên bảng</property>
+                      <property name="tooltip-text" translatable="yes">Nhấp trực tiếp lên bảng vẽ để chấm điểm tâm</property>
+                      <style>
+                        <class name="suggested-action" />
+                      </style>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkButton" id="center_current_view_button">
+                      <property name="label">📍 Lấy giữa màn hình</property>
+                      <property name="tooltip-text" translatable="yes">Lấy điểm giữa khung nhìn hiện tại làm tâm</property>
+                      <style>
+                        <class name="flat" />
+                      </style>
+                    </object>
+                  </child>
+                </object>
+              </child>
+              <!-- Hàng nút vẽ nhanh theo tâm đã chấm -->
+              <child>
+                <object class="GtkBox">
+                  <property name="spacing">4</property>
+                  <property name="homogeneous">true</property>
+                  <property name="margin-start">8</property>
+                  <property name="margin-end">8</property>
+                  <property name="margin-bottom">6</property>
+                  <child>
+                    <object class="GtkButton" id="draw_circle_from_center">
+                      <property name="label">⭕ Đường tròn</property>
+                      <property name="tooltip-text" translatable="yes">Vẽ đường tròn quanh điểm tâm đã chấm</property>
+                      <style>
+                        <class name="flat" />
+                        <class name="caption" />
+                      </style>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkButton" id="draw_triangle_from_center">
+                      <property name="label">📐 Tam giác đều</property>
+                      <property name="tooltip-text" translatable="yes">Vẽ tam giác đều nhận tâm đã chấm làm trọng tâm</property>
+                      <style>
+                        <class name="flat" />
+                        <class name="caption" />
+                      </style>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkButton" id="draw_square_from_center">
+                      <property name="label">🟩 Hình vuông</property>
+                      <property name="tooltip-text" translatable="yes">Vẽ hình vuông nhận tâm đã chấm làm tâm đối xứng</property>
+                      <style>
+                        <class name="flat" />
+                        <class name="caption" />
+                      </style>
+                    </object>
+                  </child>
+                </object>
+              </child>
+            </object>
+          </child>
+
           <!-- Quick Action Buttons -->
           <child>
             <object class="GtkBox">

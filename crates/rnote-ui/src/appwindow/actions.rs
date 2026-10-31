@@ -438,6 +438,19 @@ impl RnAppWindow {
                 }
             }
         ));
+
+        let action_pick_center = gio::SimpleAction::new("pick-center", None);
+        self.add_action(&action_pick_center);
+        action_pick_center.connect_activate(clone!(
+            #[weak(rename_to=appwindow)]
+            self,
+            move |_, _| {
+                if let Some(canvas) = appwindow.active_tab_canvas() {
+                    canvas.set_picking_center(true);
+                    appwindow.overlays().dispatch_toast_text("🎯 Hãy nhấp chuột hoặc chạm bút lên bảng vẽ để đặt điểm tâm... (Esc để huỷ)", None);
+                }
+            }
+        ));
         action_active_tab_move_left.connect_activate(clone!(
             #[weak(rename_to=appwindow)]
             self,

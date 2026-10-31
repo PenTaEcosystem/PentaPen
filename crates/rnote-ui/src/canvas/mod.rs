@@ -91,6 +91,7 @@ mod imp {
         pub(crate) touch_drawing: Cell<bool>,
         pub(crate) show_drawing_cursor: Cell<bool>,
         pub(crate) text_input_enabled: Cell<bool>,
+        pub(crate) picking_center: Cell<bool>,
 
         pub(crate) last_export_dir: RefCell<Option<gio::File>>,
     }
@@ -189,6 +190,7 @@ mod imp {
                 touch_drawing: Cell::new(false),
                 show_drawing_cursor: Cell::new(false),
                 text_input_enabled: Cell::new(false),
+                picking_center: Cell::new(false),
 
                 last_export_dir: RefCell::new(None),
             }
@@ -1021,6 +1023,19 @@ impl RnCanvas {
             } else {
                 self.set_cursor(Some(&*self.imp().invisible_cursor.borrow()));
             }
+        } else {
+            self.set_cursor(Some(&*self.imp().regular_cursor.borrow()));
+        }
+    }
+
+    pub(crate) fn is_picking_center(&self) -> bool {
+        self.imp().picking_center.get()
+    }
+
+    pub(crate) fn set_picking_center(&self, picking: bool) {
+        self.imp().picking_center.set(picking);
+        if picking {
+            self.set_cursor_from_name(Some("crosshair"));
         } else {
             self.set_cursor(Some(&*self.imp().regular_cursor.borrow()));
         }

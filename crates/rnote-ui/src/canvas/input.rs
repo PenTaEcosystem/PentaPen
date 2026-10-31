@@ -205,7 +205,35 @@ pub(crate) fn handle_pointer_controller_event(
                 PenState::Up => {
                     canvas.enable_drawing_cursor(false);
 
-                    canvas.engine_mut().set_last_center_point(element.pos, Some("O".to_string()));
+                    if canvas.is_picking_center() {
+                        canvas.set_picking_center(false);
+                        let pos = element.pos;
+                        let label = "O".to_string();
+                        let mut fig = rnote_compose::geometry::MathFigure::new();
+                        fig.add_point(pos, Some(label.clone()));
+                        canvas.engine_mut().set_last_center_point(pos, Some(label.clone()));
+                        let flags = canvas.engine_mut().insert_shape(rnote_compose::Shape::MathFigure(fig));
+                        if let Some(appwindow) = canvas.root().and_then(|r| r.downcast::<crate::RnAppWindow>().ok()) {
+                            appwindow.handle_widget_flags(flags, &canvas);
+                            appwindow.overlays().dispatch_toast_text(&format!("🎯 Đã chấm tâm O tại ({:.0}, {:.0})! AI đã sẵn sàng.", pos.x, pos.y), None);
+                            let aimenu = appwindow.main_header().aimenu();
+                            aimenu.update_center_status();
+                            aimenu.append_ai_message(&format!(
+                                "🎯 <b>[Đã Chấm Tâm O]</b> tại toạ độ ({:.0}, {:.0})!\nBây giờ AI sẽ tự động dựng hình chính xác quanh điểm tâm này khi bạn ra lệnh (ví dụ: <i>'vẽ đường tròn bán kính 80'</i>, <i>'vẽ tam giác'</i>, <i>'vẽ hình vuông'</i>)!",
+                                pos.x, pos.y
+                            ));
+                            aimenu.open_menu();
+                        }
+                        return (glib::Propagation::Stop, pen_state, stylus_active);
+                    }
+
+                    if let Some(appwindow) = canvas.root().and_then(|r| r.downcast::<crate::RnAppWindow>().ok()) {
+                        if appwindow.engine_config().read().pens_config.shaper_config.builder_type == rnote_compose::builders::ShapeBuilderType::MathPoint {
+                            let lbl = appwindow.engine_config().read().pens_config.shaper_config.math_center_label.clone();
+                            canvas.engine_mut().set_last_center_point(element.pos, Some(lbl));
+                            appwindow.main_header().aimenu().update_center_status();
+                        }
+                    }
 
                     let (ep, wf) = canvas.engine_mut().handle_pen_event(
                         PenEvent::Up {
@@ -221,6 +249,10 @@ pub(crate) fn handle_pointer_controller_event(
                 PenState::Proximity => {
                     canvas.enable_drawing_cursor(false);
 
+                    if canvas.is_picking_center() {
+                        return (glib::Propagation::Stop, pen_state, stylus_active);
+                    }
+
                     let (ep, wf) = canvas.engine_mut().handle_pen_event(
                         PenEvent::Proximity {
                             element,
@@ -235,6 +267,10 @@ pub(crate) fn handle_pointer_controller_event(
                 PenState::Down => {
                     canvas.grab_focus();
                     canvas.enable_drawing_cursor(true);
+
+                    if canvas.is_picking_center() {
+                        return (glib::Propagation::Stop, pen_state, stylus_active);
+                    }
 
                     let (ep, wf) = canvas.engine_mut().handle_pen_event(
                         PenEvent::Down {
@@ -264,6 +300,14 @@ pub(crate) fn handle_key_controller_key_pressed(
     canvas.grab_focus();
 
     let now = Instant::now();
+    if gdk_key == gdk::Key::Escape && canvas.is_picking_center() {
+        canvas.set_picking_center(false);
+        if let Some(appwindow) = canvas.root().and_then(|r| r.downcast::<crate::RnAppWindow>().ok()) {
+            appwindow.overlays().dispatch_toast_text("Đã huỷ chế độ chọn tâm.", None);
+        }
+        return glib::Propagation::Stop;
+    }
+
     let is_typewriter =
         canvas.engine_ref().current_pen_style_w_override() == PenStyle::Typewriter;
     if !is_typewriter
@@ -276,6 +320,7 @@ pub(crate) fn handle_key_controller_key_pressed(
                 gdk::Key::r | gdk::Key::R => Some("win.shape-circle"),
                 gdk::Key::s | gdk::Key::S => Some("win.shape-square"),
                 gdk::Key::p | gdk::Key::P => Some("win.shape-point"),
+                gdk::Key::o | gdk::Key::O => Some("win.pick-center"),
                 _ => None,
             };
             if let Some(action) = action_name {

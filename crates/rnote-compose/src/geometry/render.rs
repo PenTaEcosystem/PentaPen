@@ -128,6 +128,15 @@ pub fn draw_math_figure(
         );
         cx.fill(dot, &stroke_brush);
 
+        // Highlight center point (e.g. O) with a distinct concentric ring
+        if pt.label.as_deref() == Some("O") {
+            let ring = kurbo::Circle::new(
+                kurbo::Point::new(pt.pos.x, pt.pos.y),
+                POINT_DOT_RADIUS * 2.2,
+            );
+            cx.stroke(ring, &stroke_brush, stroke_width * 0.7);
+        }
+
         // Point label
         if let Some(ref text) = pt.label {
             if let Ok(layout) = cx

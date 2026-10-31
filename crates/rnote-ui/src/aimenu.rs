@@ -199,6 +199,20 @@ mod imp {
         #[template_child]
         pub(crate) save_key_button: TemplateChild<Button>,
         #[template_child]
+        pub(crate) center_status_label: TemplateChild<Label>,
+        #[template_child]
+        pub(crate) clear_center_button: TemplateChild<Button>,
+        #[template_child]
+        pub(crate) pick_center_button: TemplateChild<Button>,
+        #[template_child]
+        pub(crate) center_current_view_button: TemplateChild<Button>,
+        #[template_child]
+        pub(crate) draw_circle_from_center: TemplateChild<Button>,
+        #[template_child]
+        pub(crate) draw_triangle_from_center: TemplateChild<Button>,
+        #[template_child]
+        pub(crate) draw_square_from_center: TemplateChild<Button>,
+        #[template_child]
         pub(crate) quick_triangle: TemplateChild<Button>,
         #[template_child]
         pub(crate) quick_circle: TemplateChild<Button>,
@@ -264,6 +278,31 @@ impl Default for RnAiMenu {
 impl RnAiMenu {
     pub(crate) fn new() -> Self {
         glib::Object::new()
+    }
+
+    pub(crate) fn open_menu(&self) {
+        self.imp().popover.popup();
+    }
+
+    pub(crate) fn close_menu(&self) {
+        self.imp().popover.popdown();
+    }
+
+    pub(crate) fn update_center_status(&self) {
+        let imp = self.imp();
+        if let Some(appwindow) = imp.appwindow.borrow().as_ref().and_then(|w| w.upgrade()) {
+            if let Some(canvas) = appwindow.active_tab_canvas() {
+                if let Some((pos, lbl)) = canvas.engine_ref().last_center_point() {
+                    let name = lbl.unwrap_or_else(|| "O".to_string());
+                    imp.center_status_label.set_markup(&format!(
+                        "🎯 Tâm đang chọn: <b>{}</b> ({:.0}, {:.0})",
+                        name, pos.x, pos.y
+                    ));
+                    return;
+                }
+            }
+        }
+        imp.center_status_label.set_markup("⚪ Chưa chọn tâm (Bấm 'Chấm tâm' để chọn)");
     }
 
     pub(crate) fn init(&self, appwindow: &RnAppWindow) {
@@ -341,6 +380,76 @@ impl RnAiMenu {
             let model_name = pull_entry.text().to_string();
             pull_entry.set_text("");
             this.pull_model(model_name);
+        });
+
+        // Connect Popover show to refresh center status
+        let this = self.clone();
+        imp.popover.connect_show(move |_| {
+            this.update_center_status();
+        });
+        self.update_center_status();
+
+        // Pick Center Button: Sets picking center mode on canvas and closes popover
+        let this = self.clone();
+        imp.pick_center_button.connect_clicked(move |_| {
+            if let Some(appwindow) = this.imp().appwindow.borrow().as_ref().and_then(|w| w.upgrade()) {
+                if let Some(canvas) = appwindow.active_tab_canvas() {
+                    canvas.set_picking_center(true);
+                    this.close_menu();
+                    appwindow.overlays().dispatch_toast_text("🎯 Hãy nhấp chuột hoặc chạm bút lên bảng vẽ để đặt điểm tâm... (Esc để huỷ)", None);
+                }
+            }
+        });
+
+        // Center Current View: Sets center at viewport center immediately
+        let this = self.clone();
+        imp.center_current_view_button.connect_clicked(move |_| {
+            if let Some(appwindow) = this.imp().appwindow.borrow().as_ref().and_then(|w| w.upgrade()) {
+                if let Some(canvas) = appwindow.active_tab_canvas() {
+                    let pos = canvas.engine_ref().camera.viewport_center();
+                    let label = "O".to_string();
+                    let mut fig = MathFigure::new();
+                    fig.add_point(pos, Some(label.clone()));
+                    canvas.engine_mut().set_last_center_point(pos, Some(label.clone()));
+                    let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
+                    appwindow.handle_widget_flags(flags, &canvas);
+                    this.update_center_status();
+                    this.append_ai_message(&format!(
+                        "🎯 <b>[Đã Chấm Tâm O]</b> tại toạ độ ({:.0}, {:.0}) giữa màn hình!\nBây giờ bạn có thể bấm các nút vẽ nhanh bên dưới hoặc gõ lệnh, AI sẽ tự động dựng hình chính xác quanh tâm này!",
+                        pos.x, pos.y
+                    ));
+                }
+            }
+        });
+
+        // Clear Center Button: Clears the chosen center
+        let this = self.clone();
+        imp.clear_center_button.connect_clicked(move |_| {
+            if let Some(appwindow) = this.imp().appwindow.borrow().as_ref().and_then(|w| w.upgrade()) {
+                if let Some(canvas) = appwindow.active_tab_canvas() {
+                    canvas.engine_mut().last_center_point = None;
+                    this.update_center_status();
+                    this.append_ai_message("🔄 Đã bỏ chọn tâm. Bạn có thể bấm '🎯 Chấm tâm trên bảng' để chọn tâm mới!");
+                }
+            }
+        });
+
+        // Draw Circle from Center
+        let this = self.clone();
+        imp.draw_circle_from_center.connect_clicked(move |_| {
+            this.handle_user_prompt("vẽ đường tròn quanh tâm này bán kính 90");
+        });
+
+        // Draw Triangle from Center
+        let this = self.clone();
+        imp.draw_triangle_from_center.connect_clicked(move |_| {
+            this.handle_user_prompt("vẽ tam giác đều quanh tâm này");
+        });
+
+        // Draw Square from Center
+        let this = self.clone();
+        imp.draw_square_from_center.connect_clicked(move |_| {
+            this.handle_user_prompt("vẽ hình vuông quanh tâm này cạnh 160");
         });
 
         // Quick action: Triangle
@@ -460,7 +569,7 @@ impl RnAiMenu {
         self.scroll_to_bottom();
     }
 
-    fn append_ai_message(&self, markup: &str) {
+    pub(crate) fn append_ai_message(&self, markup: &str) {
         let label = Label::builder()
             .use_markup(true)
             .label(markup)
@@ -520,7 +629,7 @@ impl RnAiMenu {
             } else if let Some((p, _)) = canvas.engine_ref().last_center_point() {
                 p
             } else {
-                Vector2::new(350.0, 300.0)
+                canvas.engine_ref().camera.viewport_center()
             };
 
             let mut fig = MathFigure::new();
@@ -528,9 +637,10 @@ impl RnAiMenu {
             canvas.engine_mut().set_last_center_point(pos, Some(label.clone()));
             let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
             appwindow.handle_widget_flags(flags, &canvas);
+            self.update_center_status();
 
             self.append_ai_message(&format!(
-                "🎯 <b>[Đã Chấm Tâm {label}]</b> tại toạ độ ({:.0}, {:.0})!\nBây giờ bạn có thể ra lệnh: <i>'vẽ đường tròn bán kính 80'</i> hoặc <i>'vẽ tam giác'</i>, AI sẽ tự động dựng hình chính xác quanh tâm này!",
+                "🎯 <b>[Đã Chấm Tâm {label}]</b> tại toạ độ ({:.0}, {:.0})!\nBây giờ bạn có thể ra lệnh: <i>'vẽ đường tròn bán kính 80'</i>, <i>'vẽ tam giác'</i>, <i>'vẽ hình vuông'</i>, AI sẽ tự động dựng hình chính xác quanh tâm này!",
                 pos.x, pos.y
             ));
             return;
@@ -553,6 +663,7 @@ impl RnAiMenu {
                 }
                 let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
                 appwindow.handle_widget_flags(flags, &canvas);
+                self.update_center_status();
 
                 self.append_ai_message(&format!(
                     "📍 <b>[Tạo Điểm Chính Xác]</b>\nĐã tạo thành công các điểm: <b>{}</b> trên canvas!",
@@ -566,11 +677,12 @@ impl RnAiMenu {
                     if let Some(name) = cap.get(1) {
                         let mut fig = MathFigure::new();
                         let p_name = name.as_str().to_uppercase();
-                        let pos = canvas.engine_ref().last_center_point().map(|(p, _)| p).unwrap_or(Vector2::new(350.0, 280.0));
+                        let pos = canvas.engine_ref().last_center_point().map(|(p, _)| p).unwrap_or_else(|| canvas.engine_ref().camera.viewport_center());
                         fig.add_point(pos, Some(p_name.clone()));
                         canvas.engine_mut().set_last_center_point(pos, Some(p_name.clone()));
                         let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
                         appwindow.handle_widget_flags(flags, &canvas);
+                        self.update_center_status();
 
                         self.append_ai_message(&format!(
                             "📍 <b>[Tạo Điểm Chính Xác]</b>\nĐã tạo điểm <b>{}</b> tại vị trí ({:.0}, {:.0}) trên canvas!",
@@ -586,25 +698,17 @@ impl RnAiMenu {
         // 2. EXACT CIRCLE: e.g. "vẽ đường tròn tâm O(200, 200) bán kính 80"
         // -------------------------------------------------------------
         if norm.contains("tròn") || norm.contains("tron") || norm.contains("circle") {
-            let mut center_pos = Vector2::new(350.0, 300.0);
-            let mut center_label = "O".to_string();
-            let mut from_click = false;
-
-            // Extract center from parsed points if available
-            if let Some(pt) = parsed_points.first() {
-                center_pos = Vector2::new(pt.x, pt.y);
-                center_label = pt.name.clone();
+            let (center_pos, center_label, from_click) = if let Some(pt) = parsed_points.first() {
+                (Vector2::new(pt.x, pt.y), pt.name.clone(), false)
             } else if let Some((pos, lbl)) = canvas.engine_ref().last_center_point() {
-                center_pos = pos;
-                if let Some(l) = lbl {
-                    center_label = l;
-                }
-                from_click = true;
+                (pos, lbl.unwrap_or_else(|| "O".to_string()), true)
             } else if norm.contains("tâm i") || norm.contains("tam i") {
-                center_label = "I".to_string();
+                (canvas.engine_ref().camera.viewport_center(), "I".to_string(), false)
             } else if norm.contains("tâm a") || norm.contains("tam a") {
-                center_label = "A".to_string();
-            }
+                (canvas.engine_ref().camera.viewport_center(), "A".to_string(), false)
+            } else {
+                (canvas.engine_ref().camera.viewport_center(), "O".to_string(), false)
+            };
 
             // Extract radius
             let r_re = regex::Regex::new(r"(?i)(?:bán kính|ban kinh|r\s*=|radius)\s*(\d+(?:\.\d+)?)").unwrap();
@@ -622,7 +726,7 @@ impl RnAiMenu {
             appwindow.handle_widget_flags(flags, &canvas);
 
             let title = if from_click {
-                format!("<b>[Dựng Đường Tròn Theo Tâm Đã Chấm]</b>\nĐã dựng đường tròn bán kính <b>R = {radius}px</b> tại đúng tâm <b>{center_label}</b> ({:.0}, {:.0}) bạn vừa chấm trên canvas!", center_pos.x, center_pos.y)
+                format!("<b>[Dựng Đường Tròn Theo Tâm Đã Chấm]</b>\nĐã dựng đường tròn bán kính <b>R = {radius}px</b> tại đúng tâm <b>{center_label}</b> ({:.0}, {:.0}) bạn đã chọn!", center_pos.x, center_pos.y)
             } else {
                 format!("<b>[Dựng Đường Tròn Chính Xác]</b>\nĐã dựng đường tròn tâm <b>{center_label}</b> tại ({:.0}, {:.0}), bán kính <b>R = {radius}px</b> trên canvas!", center_pos.x, center_pos.y)
             };
@@ -684,6 +788,12 @@ impl RnAiMenu {
         // 4. EXACT SQUARE / RECTANGLE: e.g. "vẽ hình vuông ABCD cạnh 150"
         // -------------------------------------------------------------
         if norm.contains("hình vuông") || norm.contains("hinh vuong") || norm.contains("square") {
+            let (center_pos, center_label, from_dotted) = if let Some((pos, lbl)) = canvas.engine_ref().last_center_point() {
+                (pos, lbl.unwrap_or_else(|| "O".to_string()), true)
+            } else {
+                (canvas.engine_ref().camera.viewport_center(), "O".to_string(), false)
+            };
+
             let side_re = regex::Regex::new(r"(?i)cạnh\s*(\d+(?:\.\d+)?)").unwrap();
             let side = if let Some(cap) = side_re.captures(prompt) {
                 cap.get(1).and_then(|m| m.as_str().parse::<f64>().ok()).unwrap_or(160.0)
@@ -692,18 +802,31 @@ impl RnAiMenu {
             };
 
             let mut fig = MathFigure::new();
-            fig.build_square(Vector2::new(250.0, 180.0), side, Some(["A", "B", "C", "D"]));
+            let top_left = center_pos - Vector2::splat(side * 0.5);
+            fig.build_square(top_left, side, Some(["A", "B", "C", "D"]));
+            if from_dotted {
+                fig.add_point(center_pos, Some(center_label.clone()));
+            }
 
             let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
             appwindow.handle_widget_flags(flags, &canvas);
 
-            self.append_ai_message(&format!(
-                "🟩 <b>[Dựng Hình Vuông Chính Xác]</b>\nĐã dựng hình vuông <b>ABCD</b> cạnh <b>s = {side}px</b> cùng 4 góc vuông chuẩn xác!"
-            ));
+            let msg = if from_dotted {
+                format!("🟩 <b>[Dựng Hình Vuông Theo Tâm Đã Chấm]</b>\nĐã dựng hình vuông <b>ABCD</b> cạnh <b>s = {side}px</b> có tâm đối xứng chính là <b>{center_label}</b> ({:.0}, {:.0}) bạn đã chọn!", center_pos.x, center_pos.y)
+            } else {
+                format!("🟩 <b>[Dựng Hình Vuông Chính Xác]</b>\nĐã dựng hình vuông <b>ABCD</b> cạnh <b>s = {side}px</b> tại ({:.0}, {:.0})!", center_pos.x, center_pos.y)
+            };
+            self.append_ai_message(&msg);
             return;
         }
 
         if norm.contains("hình chữ nhật") || norm.contains("hinh chu nhat") || norm.contains("rectangle") {
+            let (center_pos, center_label, from_dotted) = if let Some((pos, lbl)) = canvas.engine_ref().last_center_point() {
+                (pos, lbl.unwrap_or_else(|| "O".to_string()), true)
+            } else {
+                (canvas.engine_ref().camera.viewport_center(), "O".to_string(), false)
+            };
+
             let len_re = regex::Regex::new(r"(?i)dài\s*(\d+(?:\.\d+)?)").unwrap();
             let wid_re = regex::Regex::new(r"(?i)rộng\s*(\d+(?:\.\d+)?)").unwrap();
 
@@ -717,14 +840,21 @@ impl RnAiMenu {
                 .unwrap_or(140.0);
 
             let mut fig = MathFigure::new();
-            fig.build_rectangle(Vector2::new(220.0, 180.0), length, width, Some(["A", "B", "C", "D"]));
+            let top_left = center_pos - Vector2::new(length * 0.5, width * 0.5);
+            fig.build_rectangle(top_left, length, width, Some(["A", "B", "C", "D"]));
+            if from_dotted {
+                fig.add_point(center_pos, Some(center_label.clone()));
+            }
 
             let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
             appwindow.handle_widget_flags(flags, &canvas);
 
-            self.append_ai_message(&format!(
-                "📐 <b>[Dựng Hình Chữ Nhật Chính Xác]</b>\nĐã dựng hình chữ nhật <b>ABCD</b> (dài <b>{length}px</b>, rộng <b>{width}px</b>) cùng 4 ký hiệu góc vuông!"
-            ));
+            let msg = if from_dotted {
+                format!("📐 <b>[Dựng Hình Chữ Nhật Theo Tâm Đã Chấm]</b>\nĐã dựng hình chữ nhật <b>ABCD</b> (dài <b>{length}px</b>, rộng <b>{width}px</b>) nhận tâm <b>{center_label}</b> ({:.0}, {:.0}) làm tâm đối xứng!", center_pos.x, center_pos.y)
+            } else {
+                format!("📐 <b>[Dựng Hình Chữ Nhật Chính Xác]</b>\nĐã dựng hình chữ nhật <b>ABCD</b> (dài <b>{length}px</b>, rộng <b>{width}px</b>) tại ({:.0}, {:.0})!", center_pos.x, center_pos.y)
+            };
+            self.append_ai_message(&msg);
             return;
         }
 
@@ -757,6 +887,12 @@ impl RnAiMenu {
         // 6. EXACT TRIANGLE & SPECIAL LINES
         // -------------------------------------------------------------
         if norm.contains("tam giác") || norm.contains("tam giac") || norm.contains("triangle") {
+            let (center_pos, center_label, from_dotted) = if let Some((pos, lbl)) = canvas.engine_ref().last_center_point() {
+                (pos, lbl.unwrap_or_else(|| "O".to_string()), true)
+            } else {
+                (canvas.engine_ref().camera.viewport_center(), "O".to_string(), false)
+            };
+
             let mut fig = MathFigure::new();
             let (pa_pos, pb_pos, pc_pos, kind_str) = if parsed_points.len() >= 3 {
                 (
@@ -766,13 +902,18 @@ impl RnAiMenu {
                     "theo toạ độ chỉ định"
                 )
             } else if norm.contains("vuông") || norm.contains("vuong") || norm.contains("right") {
-                (Vector2::new(220.0, 380.0), Vector2::new(450.0, 380.0), Vector2::new(220.0, 180.0), "vuông tại A")
-            } else if norm.contains("đều") || norm.contains("deu") || norm.contains("equilateral") {
-                (Vector2::new(220.0, 380.0), Vector2::new(450.0, 380.0), Vector2::new(335.0, 180.0), "đều")
+                (center_pos, center_pos + Vector2::new(200.0, 0.0), center_pos + Vector2::new(0.0, -140.0), "vuông tại A")
             } else if norm.contains("cân") || norm.contains("can") || norm.contains("isosceles") {
-                (Vector2::new(220.0, 380.0), Vector2::new(450.0, 380.0), Vector2::new(335.0, 190.0), "cân tại C")
+                (center_pos + Vector2::new(-110.0, 70.0), center_pos + Vector2::new(110.0, 70.0), center_pos + Vector2::new(0.0, -90.0), "cân tại C")
             } else {
-                (Vector2::new(200.0, 380.0), Vector2::new(460.0, 380.0), Vector2::new(290.0, 180.0), "thường")
+                let r = 95.0;
+                let sqrt3_div_2 = 3.0_f64.sqrt() * 0.5;
+                (
+                    center_pos + Vector2::new(0.0, -r),
+                    center_pos + Vector2::new(-r * sqrt3_div_2, r * 0.5),
+                    center_pos + Vector2::new(r * sqrt3_div_2, r * 0.5),
+                    "đều"
+                )
             };
 
             let name_a = parsed_points.get(0).map(|p| p.name.as_str()).unwrap_or("A");
@@ -780,6 +921,10 @@ impl RnAiMenu {
             let name_c = parsed_points.get(2).map(|p| p.name.as_str()).unwrap_or("C");
 
             let (pa, pb, pc, _, _, _) = fig.build_triangle(pa_pos, pb_pos, pc_pos, Some([name_a, name_b, name_c]));
+
+            if from_dotted {
+                fig.add_point(center_pos, Some(center_label.clone()));
+            }
 
             let mut extras = Vec::new();
 
@@ -827,9 +972,13 @@ impl RnAiMenu {
                 format!("\n• Bao gồm: {}", extras.join(", "))
             };
 
-            self.append_ai_message(&format!(
-                "📐 <b>[Dựng Tam Giác Chính Xác]</b>\nĐã dựng tam giác <b>{name_a}{name_b}{name_c}</b> ({kind_str})!{extra_str}"
-            ));
+            let title = if from_dotted {
+                format!("📐 <b>[Dựng Tam Giác Theo Tâm Đã Chấm]</b>\nĐã dựng tam giác <b>{name_a}{name_b}{name_c}</b> ({kind_str}) nhận tâm <b>{center_label}</b> ({:.0}, {:.0}) làm tâm!{extra_str}", center_pos.x, center_pos.y)
+            } else {
+                format!("📐 <b>[Dựng Tam Giác Chính Xác]</b>\nĐã dựng tam giác <b>{name_a}{name_b}{name_c}</b> ({kind_str})!{extra_str}")
+            };
+
+            self.append_ai_message(&title);
             return;
         }
 
@@ -837,10 +986,14 @@ impl RnAiMenu {
         // 7. TANGENTS TOOL CALL
         // -------------------------------------------------------------
         if norm.contains("tiếp tuyến") || norm.contains("tiep tuyen") || norm.contains("tangent") {
-            let center = Vector2::new(300.0, 260.0);
+            let (center, center_label, from_dotted) = if let Some((pos, lbl)) = canvas.engine_ref().last_center_point() {
+                (pos, lbl.unwrap_or_else(|| "O".to_string()), true)
+            } else {
+                (canvas.engine_ref().camera.viewport_center(), "O".to_string(), false)
+            };
             let radius = 70.0;
             let mut fig = MathFigure::new();
-            let c_id = fig.add_point(center, Some("O".to_string()));
+            let c_id = fig.add_point(center, Some(center_label.clone()));
             fig.add_circle_radius(c_id, radius);
 
             let m_pos = Vector2::new(center.x + radius + 110.0, center.y);
@@ -863,16 +1016,55 @@ impl RnAiMenu {
             let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
             appwindow.handle_widget_flags(flags, &canvas);
 
-            self.append_ai_message(
-                "📏 <b>[Dựng Tiếp Tuyến Chính Xác]</b>\nĐã dựng 2 tiếp tuyến từ điểm ngoài <b>M</b> đến đường tròn (O) với các tiếp điểm <b>T1, T2</b> và ký hiệu vuông góc chuẩn xác!"
-            );
+            let msg = if from_dotted {
+                format!("📏 <b>[Dựng Tiếp Tuyến Theo Tâm Đã Chấm]</b>\nĐã dựng 2 tiếp tuyến từ điểm ngoài <b>M</b> đến đường tròn tâm <b>{center_label}</b> ({:.0}, {:.0}) với các tiếp điểm <b>T1, T2</b>!", center.x, center.y)
+            } else {
+                "📏 <b>[Dựng Tiếp Tuyến Chính Xác]</b>\nĐã dựng 2 tiếp tuyến từ điểm ngoài <b>M</b> đến đường tròn (O) với các tiếp điểm <b>T1, T2</b> và ký hiệu vuông góc chuẩn xác!".to_string()
+            };
+
+            self.append_ai_message(&msg);
+            return;
+        }
+
+        // -------------------------------------------------------------
+        // 7b. REGULAR POLYGON / HEXAGON: e.g. "vẽ lục giác đều", "đa giác đều"
+        // -------------------------------------------------------------
+        if norm.contains("lục giác") || norm.contains("luc giac") || norm.contains("hexagon") || norm.contains("đa giác") || norm.contains("da giac") {
+            let (center_pos, center_label, from_dotted) = if let Some((pos, lbl)) = canvas.engine_ref().last_center_point() {
+                (pos, lbl.unwrap_or_else(|| "O".to_string()), true)
+            } else {
+                (canvas.engine_ref().camera.viewport_center(), "O".to_string(), false)
+            };
+            let radius = 90.0;
+            let mut fig = MathFigure::new();
+            let _c_id = fig.add_point(center_pos, Some(center_label.clone()));
+            let mut pt_ids = Vec::new();
+            for i in 0..6 {
+                let angle = i as f64 * std::f64::consts::PI / 3.0 - std::f64::consts::FRAC_PI_2;
+                let p = center_pos + Vector2::new(radius * angle.cos(), radius * angle.sin());
+                let lbl = format!("P{}", i + 1);
+                let id = fig.add_point(p, Some(lbl));
+                pt_ids.push(id);
+            }
+            for i in 0..6 {
+                fig.add_segment(pt_ids[i], pt_ids[(i + 1) % 6]);
+            }
+            let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
+            appwindow.handle_widget_flags(flags, &canvas);
+
+            let msg = if from_dotted {
+                format!("✡️ <b>[Dựng Lục Giác Đều Theo Tâm Đã Chấm]</b>\nĐã dựng lục giác đều 6 cạnh nhận điểm tâm <b>{center_label}</b> ({:.0}, {:.0}) làm tâm đối xứng!", center_pos.x, center_pos.y)
+            } else {
+                format!("✡️ <b>[Dựng Lục Giác Đều]</b>\nĐã dựng lục giác đều 6 cạnh tại toạ độ ({:.0}, {:.0})!", center_pos.x, center_pos.y)
+            };
+            self.append_ai_message(&msg);
             return;
         }
 
         // -------------------------------------------------------------
         // 8. CENTERS TOOL CALL
         // -------------------------------------------------------------
-        if norm.contains("tâm") || norm.contains("tam") || norm.contains("center") {
+        if (norm.contains("4 tâm") || norm.contains("bon tam") || norm.contains("bốn tâm") || norm.contains("các tâm")) && !norm.contains("chấm tâm") {
             let p1 = Vector2::new(200.0, 360.0);
             let p2 = Vector2::new(460.0, 360.0);
             let p3 = Vector2::new(290.0, 180.0);
@@ -912,6 +1104,13 @@ impl RnAiMenu {
                 "🤖 <b>[Ollama: {model_name}]</b> Đang suy luận và tạo hình..."
             ));
 
+            let center_hint = if let Some((pos, lbl)) = canvas.engine_ref().last_center_point() {
+                let name = lbl.unwrap_or_else(|| "O".to_string());
+                format!("IMPORTANT CAD CONSTRAINT: The user has selected a geometric center point '{name}' at coordinates ({:.0}, {:.0}). All circles, regular polygons, or centered constructions MUST use ({:.0}, {:.0}) as center!", pos.x, pos.y, pos.x, pos.y)
+            } else {
+                String::new()
+            };
+
             let prompt_owned = prompt.to_string();
             let this = self.clone();
 
@@ -926,7 +1125,7 @@ impl RnAiMenu {
 
                 let req_body = serde_json::json!({
                     "model": model_name,
-                    "prompt": format!("{system_prompt}\n\nUser request: {prompt_owned}"),
+                    "prompt": format!("{system_prompt}\n{center_hint}\n\nUser request: {prompt_owned}"),
                     "stream": false,
                     "format": "json"
                 });
@@ -991,7 +1190,8 @@ impl RnAiMenu {
                                                         let cid = if let Some(&id) = p_map.get(&c_n) {
                                                             id
                                                         } else {
-                                                            let id = fig.add_point(Vector2::new(350.0, 300.0), Some(c.center.clone()));
+                                                            let def_center = cv.engine_ref().last_center_point().map(|(p, _)| p).unwrap_or_else(|| cv.engine_ref().camera.viewport_center());
+                                                            let id = fig.add_point(def_center, Some(c.center.clone()));
                                                             p_map.insert(c_n, id);
                                                             id
                                                         };

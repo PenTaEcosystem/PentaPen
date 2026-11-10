@@ -7,8 +7,8 @@ use rnote_compose::penpath::Element;
 use rnote_engine::WidgetFlags;
 use rnote_engine::ext::EventPropagationExt;
 use rnote_engine::ext::GraphenePointExt;
-use rnote_engine::pens::{PenMode, PenStyle};
 use rnote_engine::pens::penholder::BacklogPolicy;
+use rnote_engine::pens::{PenMode, PenStyle};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use tracing::trace;
@@ -211,11 +211,24 @@ pub(crate) fn handle_pointer_controller_event(
                         let label = "O".to_string();
                         let mut fig = rnote_compose::geometry::MathFigure::new();
                         fig.add_point(pos, Some(label.clone()));
-                        canvas.engine_mut().set_last_center_point(pos, Some(label.clone()));
-                        let flags = canvas.engine_mut().insert_shape(rnote_compose::Shape::MathFigure(fig));
-                        if let Some(appwindow) = canvas.root().and_then(|r| r.downcast::<crate::RnAppWindow>().ok()) {
+                        canvas
+                            .engine_mut()
+                            .set_last_center_point(pos, Some(label.clone()));
+                        let flags = canvas
+                            .engine_mut()
+                            .insert_shape(rnote_compose::Shape::MathFigure(fig));
+                        if let Some(appwindow) = canvas
+                            .root()
+                            .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
+                        {
                             appwindow.handle_widget_flags(flags, &canvas);
-                            appwindow.overlays().dispatch_toast_text(&format!("🎯 Đã chấm tâm O tại ({:.0}, {:.0})! AI đã sẵn sàng.", pos.x, pos.y), None);
+                            appwindow.overlays().dispatch_toast_text(
+                                &format!(
+                                    "🎯 Đã chấm tâm O tại ({:.0}, {:.0})! AI đã sẵn sàng.",
+                                    pos.x, pos.y
+                                ),
+                                None,
+                            );
                             let aimenu = appwindow.main_header().aimenu();
                             aimenu.update_center_status();
                             aimenu.append_ai_message(&format!(
@@ -227,10 +240,28 @@ pub(crate) fn handle_pointer_controller_event(
                         return (glib::Propagation::Stop, pen_state, stylus_active);
                     }
 
-                    if let Some(appwindow) = canvas.root().and_then(|r| r.downcast::<crate::RnAppWindow>().ok()) {
-                        if appwindow.engine_config().read().pens_config.shaper_config.builder_type == rnote_compose::builders::ShapeBuilderType::MathPoint {
-                            let lbl = appwindow.engine_config().read().pens_config.shaper_config.math_center_label.clone();
-                            canvas.engine_mut().set_last_center_point(element.pos, Some(lbl));
+                    if let Some(appwindow) = canvas
+                        .root()
+                        .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
+                    {
+                        if appwindow
+                            .engine_config()
+                            .read()
+                            .pens_config
+                            .shaper_config
+                            .builder_type
+                            == rnote_compose::builders::ShapeBuilderType::MathPoint
+                        {
+                            let lbl = appwindow
+                                .engine_config()
+                                .read()
+                                .pens_config
+                                .shaper_config
+                                .math_center_label
+                                .clone();
+                            canvas
+                                .engine_mut()
+                                .set_last_center_point(element.pos, Some(lbl));
                             appwindow.main_header().aimenu().update_center_status();
                         }
                     }
@@ -302,19 +333,27 @@ pub(crate) fn handle_key_controller_key_pressed(
     let now = Instant::now();
     if gdk_key == gdk::Key::Escape && canvas.is_picking_center() {
         canvas.set_picking_center(false);
-        if let Some(appwindow) = canvas.root().and_then(|r| r.downcast::<crate::RnAppWindow>().ok()) {
-            appwindow.overlays().dispatch_toast_text("Đã huỷ chế độ chọn tâm.", None);
+        if let Some(appwindow) = canvas
+            .root()
+            .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
+        {
+            appwindow
+                .overlays()
+                .dispatch_toast_text("Đã huỷ chế độ chọn tâm.", None);
         }
         return glib::Propagation::Stop;
     }
 
-    let is_typewriter =
-        canvas.engine_ref().current_pen_style_w_override() == PenStyle::Typewriter;
-    if !is_typewriter
+    let pen_style = canvas.engine_ref().current_pen_style_w_override();
+    if pen_style != PenStyle::Typewriter
+        && pen_style != PenStyle::Shaper
         && !gdk_modifiers.contains(gdk::ModifierType::CONTROL_MASK)
         && !gdk_modifiers.contains(gdk::ModifierType::ALT_MASK)
     {
-        if let Some(appwindow) = canvas.root().and_then(|r| r.downcast::<crate::RnAppWindow>().ok()) {
+        if let Some(appwindow) = canvas
+            .root()
+            .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
+        {
             let action_name = match gdk_key {
                 gdk::Key::l | gdk::Key::L => Some("win.shape-line"),
                 gdk::Key::r | gdk::Key::R => Some("win.shape-circle"),
@@ -350,6 +389,23 @@ pub(crate) fn handle_key_controller_key_pressed(
     };
 
     canvas.emit_handle_widget_flags(widget_flags);
+    if pen_style == PenStyle::Shaper
+        && propagation.into_glib() == glib::Propagation::Proceed
+        && !gdk_modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK)
+        && matches!(gdk_key, gdk::Key::o | gdk::Key::O)
+    {
+        if let Some(appwindow) = canvas
+            .root()
+            .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
+        {
+            gtk4::gio::prelude::ActionGroupExt::activate_action(
+                &appwindow,
+                "win.pick-center",
+                None,
+            );
+            return glib::Propagation::Stop;
+        }
+    }
     propagation.into_glib()
 }
 

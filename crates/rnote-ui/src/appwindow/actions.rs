@@ -1301,10 +1301,6 @@ impl RnAppWindow {
         app.set_accels_for_action("win.pen-style::eraser", &["<Ctrl>4", "<Ctrl>KP_4"]);
         app.set_accels_for_action("win.pen-style::selector", &["<Ctrl>5", "<Ctrl>KP_5"]);
         app.set_accels_for_action("win.pen-style::tools", &["<Ctrl>6", "<Ctrl>KP_6"]);
-        app.set_accels_for_action("win.shape-line", &["l", "L"]);
-        app.set_accels_for_action("win.shape-circle", &["r", "R"]);
-        app.set_accels_for_action("win.shape-square", &["s", "S"]);
-        app.set_accels_for_action("win.shape-point", &["p", "P"]);
         (1..=9).for_each(|i| {
             app.set_accels_for_action(
                 &format!("win.set-color-{i}"),

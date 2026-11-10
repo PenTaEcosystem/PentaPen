@@ -15,14 +15,14 @@ pub mod constraints;
 pub mod eventresult;
 /// module for extension traits for foreign types
 pub mod ext;
+/// module for geometric construction and constraint solving
+pub mod geometry;
 /// module for pen events
 pub mod penevent;
 /// module for pen paths
 pub mod penpath;
 /// utilities for serializing / deserializing
 pub mod serialize;
-/// module for geometric construction and constraint solving
-pub mod geometry;
 /// module for shapes
 pub mod shapes;
 /// module for splitorder

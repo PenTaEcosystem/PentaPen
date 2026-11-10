@@ -24,9 +24,9 @@ pub use triangle::{Triangle, TriangleCenterType};
 
 use crate::shapes::Shapeable;
 use crate::style::Composer;
+use crate::style::Style;
 use crate::style::rough::RoughOptions;
 use crate::style::smooth::SmoothOptions;
-use crate::style::Style;
 use p2d::bounding_volume::{Aabb, BoundingVolume};
 
 impl Composer<SmoothOptions> for MathFigure {

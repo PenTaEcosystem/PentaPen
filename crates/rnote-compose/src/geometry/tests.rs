@@ -137,7 +137,11 @@ fn test_constraint_solver_equal_length_and_perpendicular() {
     let pos3 = figure.points[&p3].pos;
     // P3 must converge to (0, 10) (or (0, -10))
     assert!(pos3.x.abs() < 1e-3, "P3.x should be ~0, got {}", pos3.x);
-    assert!((pos3.y.abs() - 10.0).abs() < 1e-3, "P3.y should be ~10, got {}", pos3.y);
+    assert!(
+        (pos3.y.abs() - 10.0).abs() < 1e-3,
+        "P3.y should be ~10, got {}",
+        pos3.y
+    );
 }
 
 #[test]
@@ -182,22 +186,47 @@ fn test_auto_intersections_line_circle_and_line_line() {
 
     // Horizontal line passing through y = 3 from x = -10 to x = 10
     // Intersects circle at (-4, 3) and (4, 3) because (-4)^2 + 3^2 = 25
-    figure.build_line(Vector2::new(-10.0, 3.0), Vector2::new(10.0, 3.0), Some("A"), Some("B"));
+    figure.build_line(
+        Vector2::new(-10.0, 3.0),
+        Vector2::new(10.0, 3.0),
+        Some("A"),
+        Some("B"),
+    );
 
     // Vertical line along x = 0 from y = -10 to y = 10
     // Intersects horizontal line at (0, 3) and circle at (0, 5) and (0, -5)
-    figure.build_line(Vector2::new(0.0, -10.0), Vector2::new(0.0, 10.0), Some("C"), Some("D"));
+    figure.build_line(
+        Vector2::new(0.0, -10.0),
+        Vector2::new(0.0, 10.0),
+        Some("C"),
+        Some("D"),
+    );
 
     let new_pts = figure.auto_detect_intersections();
     assert!(!new_pts.is_empty());
 
     // Check that intersection (-4, 3) or (4, 3) was detected
-    let has_inter_4_3 = figure.points.values().any(|pt| (pt.pos - Vector2::new(4.0, 3.0)).length() < 1e-3);
-    let has_inter_neg4_3 = figure.points.values().any(|pt| (pt.pos - Vector2::new(-4.0, 3.0)).length() < 1e-3);
-    let has_inter_0_3 = figure.points.values().any(|pt| (pt.pos - Vector2::new(0.0, 3.0)).length() < 1e-3);
+    let has_inter_4_3 = figure
+        .points
+        .values()
+        .any(|pt| (pt.pos - Vector2::new(4.0, 3.0)).length() < 1e-3);
+    let has_inter_neg4_3 = figure
+        .points
+        .values()
+        .any(|pt| (pt.pos - Vector2::new(-4.0, 3.0)).length() < 1e-3);
+    let has_inter_0_3 = figure
+        .points
+        .values()
+        .any(|pt| (pt.pos - Vector2::new(0.0, 3.0)).length() < 1e-3);
 
-    assert!(has_inter_4_3, "Should detect (4, 3) line-circle intersection");
-    assert!(has_inter_neg4_3, "Should detect (-4, 3) line-circle intersection");
+    assert!(
+        has_inter_4_3,
+        "Should detect (4, 3) line-circle intersection"
+    );
+    assert!(
+        has_inter_neg4_3,
+        "Should detect (-4, 3) line-circle intersection"
+    );
     assert!(has_inter_0_3, "Should detect (0, 3) line-line intersection");
 }
 
@@ -216,9 +245,25 @@ fn test_auto_detect_triangles_and_centers() {
     figure.auto_detect_triangles_and_centers(true);
 
     // Centroid G, Circumcenter O, Orthocenter H, Incenter I must be present
-    let labels: Vec<String> = figure.points.values().filter_map(|p| p.label.clone()).collect();
-    assert!(labels.contains(&"G".to_string()), "Centroid G should be detected");
-    assert!(labels.contains(&"O".to_string()), "Circumcenter O should be detected");
-    assert!(labels.contains(&"H".to_string()), "Orthocenter H should be detected");
-    assert!(labels.contains(&"I".to_string()), "Incenter I should be detected");
+    let labels: Vec<String> = figure
+        .points
+        .values()
+        .filter_map(|p| p.label.clone())
+        .collect();
+    assert!(
+        labels.contains(&"G".to_string()),
+        "Centroid G should be detected"
+    );
+    assert!(
+        labels.contains(&"O".to_string()),
+        "Circumcenter O should be detected"
+    );
+    assert!(
+        labels.contains(&"H".to_string()),
+        "Orthocenter H should be detected"
+    );
+    assert!(
+        labels.contains(&"I".to_string()),
+        "Incenter I should be detected"
+    );
 }

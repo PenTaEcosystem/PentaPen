@@ -122,10 +122,7 @@ pub fn draw_math_figure(
             continue;
         }
         // Small filled circle for point vertex
-        let dot = kurbo::Circle::new(
-            kurbo::Point::new(pt.pos.x, pt.pos.y),
-            POINT_DOT_RADIUS,
-        );
+        let dot = kurbo::Circle::new(kurbo::Point::new(pt.pos.x, pt.pos.y), POINT_DOT_RADIUS);
         cx.fill(dot, &stroke_brush);
 
         // Highlight center point (e.g. O) with a distinct concentric ring

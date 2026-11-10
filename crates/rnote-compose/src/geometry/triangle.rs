@@ -53,7 +53,8 @@ impl Triangle {
 
     /// Signed area using cross product: 0.5 * ((xB - xA)(yC - yA) - (xC - xA)(yB - yA)).
     pub fn signed_area(&self) -> f64 {
-        0.5 * ((self.b.x - self.a.x) * (self.c.y - self.a.y) - (self.c.x - self.a.x) * (self.b.y - self.a.y))
+        0.5 * ((self.b.x - self.a.x) * (self.c.y - self.a.y)
+            - (self.c.x - self.a.x) * (self.b.y - self.a.y))
     }
 
     /// Unsigned Area of triangle ABC.
@@ -83,8 +84,12 @@ impl Triangle {
         let b2 = self.b.x * self.b.x + self.b.y * self.b.y;
         let c2 = self.c.x * self.c.x + self.c.y * self.c.y;
 
-        let ox = (a2 * (self.b.y - self.c.y) + b2 * (self.c.y - self.a.y) + c2 * (self.a.y - self.b.y)) / d;
-        let oy = (a2 * (self.c.x - self.b.x) + b2 * (self.a.x - self.c.x) + c2 * (self.b.x - self.a.x)) / d;
+        let ox =
+            (a2 * (self.b.y - self.c.y) + b2 * (self.c.y - self.a.y) + c2 * (self.a.y - self.b.y))
+                / d;
+        let oy =
+            (a2 * (self.c.x - self.b.x) + b2 * (self.a.x - self.c.x) + c2 * (self.b.x - self.a.x))
+                / d;
 
         Some(Vector2::new(ox, oy))
     }

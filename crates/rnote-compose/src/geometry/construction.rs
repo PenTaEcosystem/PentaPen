@@ -104,7 +104,12 @@ pub fn angle_bisector(b: Vector2, a: Vector2, c: Vector2) -> Option<LineDef> {
 }
 
 /// Intersection point between two infinite lines (A1-A2) and (B1-B2).
-pub fn line_line_intersection(a1: Vector2, a2: Vector2, b1: Vector2, b2: Vector2) -> Option<Vector2> {
+pub fn line_line_intersection(
+    a1: Vector2,
+    a2: Vector2,
+    b1: Vector2,
+    b2: Vector2,
+) -> Option<Vector2> {
     let da = a2 - a1;
     let db = b2 - b1;
     let denom = da.x * db.y - da.y * db.x;
@@ -143,7 +148,12 @@ pub fn tangents_from_point_to_circle(p: Vector2, center: Vector2, radius: f64) -
 }
 
 /// Intersection points between an infinite line (A1-A2) and a circle (center, radius).
-pub fn line_circle_intersection(a1: Vector2, a2: Vector2, center: Vector2, radius: f64) -> Vec<Vector2> {
+pub fn line_circle_intersection(
+    a1: Vector2,
+    a2: Vector2,
+    center: Vector2,
+    radius: f64,
+) -> Vec<Vector2> {
     if radius <= 0.0 {
         return Vec::new();
     }

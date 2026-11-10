@@ -300,9 +300,7 @@ impl ConstraintSolver {
                     let actual_dist = (v2 - v1).length();
                     r.push(actual_dist - distance);
                 }
-                Constraint::EqualLength {
-                    p1, p2, p3, p4, ..
-                } => {
+                Constraint::EqualLength { p1, p2, p3, p4, .. } => {
                     let v1 = Self::get_point_pos(p1, x, pt_to_idx, all_positions);
                     let v2 = Self::get_point_pos(p2, x, pt_to_idx, all_positions);
                     let v3 = Self::get_point_pos(p3, x, pt_to_idx, all_positions);
@@ -311,9 +309,7 @@ impl ConstraintSolver {
                     let len2 = (v4 - v3).length();
                     r.push(len1 - len2);
                 }
-                Constraint::Perpendicular {
-                    p1, p2, p3, p4, ..
-                } => {
+                Constraint::Perpendicular { p1, p2, p3, p4, .. } => {
                     let v1 = Self::get_point_pos(p1, x, pt_to_idx, all_positions);
                     let v2 = Self::get_point_pos(p2, x, pt_to_idx, all_positions);
                     let v3 = Self::get_point_pos(p3, x, pt_to_idx, all_positions);
@@ -323,9 +319,7 @@ impl ConstraintSolver {
                     let len1 = d1.length().max(1e-9);
                     r.push(d1.dot(d2) / len1);
                 }
-                Constraint::Parallel {
-                    p1, p2, p3, p4, ..
-                } => {
+                Constraint::Parallel { p1, p2, p3, p4, .. } => {
                     let v1 = Self::get_point_pos(p1, x, pt_to_idx, all_positions);
                     let v2 = Self::get_point_pos(p2, x, pt_to_idx, all_positions);
                     let v3 = Self::get_point_pos(p3, x, pt_to_idx, all_positions);
@@ -364,7 +358,11 @@ impl ConstraintSolver {
                     r.push(v1.x - v2.x);
                 }
                 Constraint::TangentLineCircle {
-                    a, b, center, radius, ..
+                    a,
+                    b,
+                    center,
+                    radius,
+                    ..
                 } => {
                     let va = Self::get_point_pos(a, x, pt_to_idx, all_positions);
                     let vb = Self::get_point_pos(b, x, pt_to_idx, all_positions);
@@ -374,7 +372,12 @@ impl ConstraintSolver {
                     let dist = ((vc.x - va.x) * dab.y - (vc.y - va.y) * dab.x).abs() / len_ab;
                     r.push(dist - radius);
                 }
-                Constraint::PinPoint { point, target, weight, .. } => {
+                Constraint::PinPoint {
+                    point,
+                    target,
+                    weight,
+                    ..
+                } => {
                     let v = Self::get_point_pos(point, x, pt_to_idx, all_positions);
                     r.push((v.x - target.x) * weight);
                     r.push((v.y - target.y) * weight);

@@ -4,7 +4,7 @@ use crate::eventresult::EventPropagation;
 use crate::geometry::MathFigure;
 use crate::penevent::{KeyboardKey, PenEvent, PenState};
 use crate::penpath::Element;
-use crate::style::{indicators, Composer};
+use crate::style::{Composer, indicators};
 use crate::{Constraints, EventResult, Shape, Style};
 use p2d::bounding_volume::{Aabb, BoundingVolume};
 use p2d::math::Vector2;

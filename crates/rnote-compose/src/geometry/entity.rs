@@ -148,7 +148,12 @@ impl GeomCircle {
     }
 
     /// Create a circle defined by center and a point on the perimeter.
-    pub fn new_through_point(id: CircleId, center: PointId, through: PointId, initial_radius: f64) -> Self {
+    pub fn new_through_point(
+        id: CircleId,
+        center: PointId,
+        through: PointId,
+        initial_radius: f64,
+    ) -> Self {
         Self {
             id,
             center,

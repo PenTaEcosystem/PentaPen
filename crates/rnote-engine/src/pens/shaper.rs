@@ -1389,7 +1389,12 @@ fn is_redundant_figure(shape: &Shape, store: &crate::store::StrokeStore) -> bool
         .stroke_keys_unordered()
         .into_iter()
         .filter_map(|key| figure_of(store, key))
-        .any(|other| other.points.values().any(|p| (p.pos - first).length() < EPS))
+        .any(|other| {
+            other
+                .points
+                .values()
+                .any(|p| (p.pos - first).length() < EPS)
+        })
 }
 
 #[cfg(test)]

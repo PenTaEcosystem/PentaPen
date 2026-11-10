@@ -3,8 +3,8 @@ use super::construction::{
     tangents_from_point_to_circle,
 };
 use super::entity::{
-    CircleId, ConstraintId, GeomCircle, GeomLine, GeomPoint, LineId, LineStyle, LineType,
-    PointId, RightAngleMark,
+    CircleId, ConstraintId, GeomCircle, GeomLine, GeomPoint, LineId, LineStyle, LineType, PointId,
+    RightAngleMark,
 };
 use super::solver::{Constraint, ConstraintSolver};
 use super::triangle::{Triangle, TriangleCenterType};
@@ -84,7 +84,8 @@ impl MathFigure {
     pub fn add_auxiliary_line(&mut self, p1: PointId, p2: PointId, line_type: LineType) -> LineId {
         let id = LineId(self.next_line_id);
         self.next_line_id += 1;
-        self.lines.insert(id, GeomLine::new_auxiliary(id, p1, p2, line_type));
+        self.lines
+            .insert(id, GeomLine::new_auxiliary(id, p1, p2, line_type));
         id
     }
 
@@ -92,7 +93,8 @@ impl MathFigure {
     pub fn add_circle_radius(&mut self, center: PointId, radius: f64) -> CircleId {
         let id = CircleId(self.next_circle_id);
         self.next_circle_id += 1;
-        self.circles.insert(id, GeomCircle::new_with_radius(id, center, radius));
+        self.circles
+            .insert(id, GeomCircle::new_with_radius(id, center, radius));
         id
     }
 
@@ -104,7 +106,8 @@ impl MathFigure {
 
         let id = CircleId(self.next_circle_id);
         self.next_circle_id += 1;
-        self.circles.insert(id, GeomCircle::new_through_point(id, center, through, r));
+        self.circles
+            .insert(id, GeomCircle::new_through_point(id, center, through, r));
         id
     }
 
@@ -141,8 +144,16 @@ impl MathFigure {
         labels: Option<[&str; 3]>,
     ) -> (PointId, PointId, PointId, LineId, LineId, LineId) {
         let (la, lb, lc) = match labels {
-            Some([x, y, z]) => (Some(x.to_string()), Some(y.to_string()), Some(z.to_string())),
-            None => (Some("A".to_string()), Some("B".to_string()), Some("C".to_string())),
+            Some([x, y, z]) => (
+                Some(x.to_string()),
+                Some(y.to_string()),
+                Some(z.to_string()),
+            ),
+            None => (
+                Some("A".to_string()),
+                Some("B".to_string()),
+                Some("C".to_string()),
+            ),
         };
 
         let pa = self.add_point(a, la);
@@ -188,7 +199,8 @@ impl MathFigure {
                 let o_pos = tri.circumcenter()?;
                 let o_id = self.add_point(o_pos, Some("O".to_string()));
                 if let Some(r) = tri.circumradius() {
-                    let mut circ = GeomCircle::new_with_radius(CircleId(self.next_circle_id), o_id, r);
+                    let mut circ =
+                        GeomCircle::new_with_radius(CircleId(self.next_circle_id), o_id, r);
                     self.next_circle_id += 1;
                     circ.style = LineStyle::Dashed;
                     self.circles.insert(circ.id, circ);
@@ -216,7 +228,8 @@ impl MathFigure {
                 let i_pos = tri.incenter()?;
                 let i_id = self.add_point(i_pos, Some("I".to_string()));
                 if let Some(r) = tri.inradius() {
-                    let mut circ = GeomCircle::new_with_radius(CircleId(self.next_circle_id), i_id, r);
+                    let mut circ =
+                        GeomCircle::new_with_radius(CircleId(self.next_circle_id), i_id, r);
                     self.next_circle_id += 1;
                     circ.style = LineStyle::Dashed;
                     self.circles.insert(circ.id, circ);
@@ -328,8 +341,18 @@ impl MathFigure {
         labels: Option<[&str; 4]>,
     ) -> (PointId, PointId, PointId, PointId) {
         let (la, lb, lc, ld) = match labels {
-            Some([a, b, c, d]) => (Some(a.to_string()), Some(b.to_string()), Some(c.to_string()), Some(d.to_string())),
-            None => (Some("A".to_string()), Some("B".to_string()), Some("C".to_string()), Some("D".to_string())),
+            Some([a, b, c, d]) => (
+                Some(a.to_string()),
+                Some(b.to_string()),
+                Some(c.to_string()),
+                Some(d.to_string()),
+            ),
+            None => (
+                Some("A".to_string()),
+                Some("B".to_string()),
+                Some("C".to_string()),
+                Some("D".to_string()),
+            ),
         };
 
         let pa = self.add_point(p, la);
@@ -537,10 +560,34 @@ impl MathFigure {
                         && adj.get(&p2).map_or(false, |v| v.contains(&p3))
                     {
                         // Found a triangle p1-p2-p3
-                        self.add_triangle_center(p1, p2, p3, TriangleCenterType::Centroid, add_auxiliary_lines);
-                        self.add_triangle_center(p1, p2, p3, TriangleCenterType::Circumcenter, add_auxiliary_lines);
-                        self.add_triangle_center(p1, p2, p3, TriangleCenterType::Orthocenter, add_auxiliary_lines);
-                        self.add_triangle_center(p1, p2, p3, TriangleCenterType::Incenter, add_auxiliary_lines);
+                        self.add_triangle_center(
+                            p1,
+                            p2,
+                            p3,
+                            TriangleCenterType::Centroid,
+                            add_auxiliary_lines,
+                        );
+                        self.add_triangle_center(
+                            p1,
+                            p2,
+                            p3,
+                            TriangleCenterType::Circumcenter,
+                            add_auxiliary_lines,
+                        );
+                        self.add_triangle_center(
+                            p1,
+                            p2,
+                            p3,
+                            TriangleCenterType::Orthocenter,
+                            add_auxiliary_lines,
+                        );
+                        self.add_triangle_center(
+                            p1,
+                            p2,
+                            p3,
+                            TriangleCenterType::Incenter,
+                            add_auxiliary_lines,
+                        );
                         return; // Add for the first triangle found
                     }
                 }
@@ -586,7 +633,9 @@ impl MathFigure {
         // Update circles through points
         for circle in self.circles.values_mut() {
             if let Some(tp_id) = circle.through_point {
-                if let (Some(cp), Some(tp)) = (self.points.get(&circle.center), self.points.get(&tp_id)) {
+                if let (Some(cp), Some(tp)) =
+                    (self.points.get(&circle.center), self.points.get(&tp_id))
+                {
                     circle.radius = (tp.pos - cp.pos).length();
                 }
             }

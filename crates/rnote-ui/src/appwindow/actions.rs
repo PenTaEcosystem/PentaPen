@@ -374,9 +374,17 @@ impl RnAppWindow {
             self,
             move |_, _| {
                 appwindow.set_pen_style(PenStyle::Shaper);
-                appwindow.overlays().penpicker().shaper_toggle().set_active(true);
-                appwindow.engine_config().write().pens_config.shaper_config.builder_type =
-                    rnote_compose::builders::ShapeBuilderType::MathLine;
+                appwindow
+                    .overlays()
+                    .penpicker()
+                    .shaper_toggle()
+                    .set_active(true);
+                appwindow
+                    .engine_config()
+                    .write()
+                    .pens_config
+                    .shaper_config
+                    .builder_type = rnote_compose::builders::ShapeBuilderType::MathLine;
                 if let Some(canvas) = appwindow.active_tab_canvas() {
                     let mut flags = rnote_engine::WidgetFlags::default();
                     flags.refresh_ui = true;
@@ -392,9 +400,17 @@ impl RnAppWindow {
             self,
             move |_, _| {
                 appwindow.set_pen_style(PenStyle::Shaper);
-                appwindow.overlays().penpicker().shaper_toggle().set_active(true);
-                appwindow.engine_config().write().pens_config.shaper_config.builder_type =
-                    rnote_compose::builders::ShapeBuilderType::MathCircle;
+                appwindow
+                    .overlays()
+                    .penpicker()
+                    .shaper_toggle()
+                    .set_active(true);
+                appwindow
+                    .engine_config()
+                    .write()
+                    .pens_config
+                    .shaper_config
+                    .builder_type = rnote_compose::builders::ShapeBuilderType::MathCircle;
                 if let Some(canvas) = appwindow.active_tab_canvas() {
                     let mut flags = rnote_engine::WidgetFlags::default();
                     flags.refresh_ui = true;
@@ -410,9 +426,17 @@ impl RnAppWindow {
             self,
             move |_, _| {
                 appwindow.set_pen_style(PenStyle::Shaper);
-                appwindow.overlays().penpicker().shaper_toggle().set_active(true);
-                appwindow.engine_config().write().pens_config.shaper_config.builder_type =
-                    rnote_compose::builders::ShapeBuilderType::Rectangle;
+                appwindow
+                    .overlays()
+                    .penpicker()
+                    .shaper_toggle()
+                    .set_active(true);
+                appwindow
+                    .engine_config()
+                    .write()
+                    .pens_config
+                    .shaper_config
+                    .builder_type = rnote_compose::builders::ShapeBuilderType::Rectangle;
                 if let Some(canvas) = appwindow.active_tab_canvas() {
                     let mut flags = rnote_engine::WidgetFlags::default();
                     flags.refresh_ui = true;
@@ -428,9 +452,17 @@ impl RnAppWindow {
             self,
             move |_, _| {
                 appwindow.set_pen_style(PenStyle::Shaper);
-                appwindow.overlays().penpicker().shaper_toggle().set_active(true);
-                appwindow.engine_config().write().pens_config.shaper_config.builder_type =
-                    rnote_compose::builders::ShapeBuilderType::MathPoint;
+                appwindow
+                    .overlays()
+                    .penpicker()
+                    .shaper_toggle()
+                    .set_active(true);
+                appwindow
+                    .engine_config()
+                    .write()
+                    .pens_config
+                    .shaper_config
+                    .builder_type = rnote_compose::builders::ShapeBuilderType::MathPoint;
                 if let Some(canvas) = appwindow.active_tab_canvas() {
                     let mut flags = rnote_engine::WidgetFlags::default();
                     flags.refresh_ui = true;

@@ -25,7 +25,11 @@ pub enum SnapKind {
     /// Tangent contact point with normal vector
     Tangent { point: Vector2, normal: Vector2 },
     /// Midpoint of line segment AB
-    Midpoint { point: Vector2, a: Vector2, b: Vector2 },
+    Midpoint {
+        point: Vector2,
+        a: Vector2,
+        b: Vector2,
+    },
     /// Chord midpoint (projection of circle center onto line)
     ChordMidpoint { point: Vector2, center: Vector2 },
     /// Circle center or line endpoint

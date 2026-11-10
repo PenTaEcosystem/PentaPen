@@ -599,26 +599,24 @@ impl RnShaperPage {
             ));
 
         // Math Geometry Configuration
-        imp.math_center_label_row
-            .get()
-            .connect_changed(clone!(
-                #[weak]
-                appwindow,
-                move |row| {
-                    let text = row.text().to_string();
-                    let label = if text.trim().is_empty() {
-                        "O".to_string()
-                    } else {
-                        text.trim().to_string()
-                    };
-                    appwindow
-                        .engine_config()
-                        .write()
-                        .pens_config
-                        .shaper_config
-                        .math_center_label = label;
-                }
-            ));
+        imp.math_center_label_row.get().connect_changed(clone!(
+            #[weak]
+            appwindow,
+            move |row| {
+                let text = row.text().to_string();
+                let label = if text.trim().is_empty() {
+                    "O".to_string()
+                } else {
+                    text.trim().to_string()
+                };
+                appwindow
+                    .engine_config()
+                    .write()
+                    .pens_config
+                    .shaper_config
+                    .math_center_label = label;
+            }
+        ));
 
         imp.math_auto_intersections_row
             .get()

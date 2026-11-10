@@ -617,6 +617,12 @@ impl RnAiMenu {
 
         let norm = prompt.to_lowercase();
         let parsed_points = parse_points_from_text(prompt);
+        // Where generated figures land when the prompt gives no coordinates: the dotted center, else the visible area.
+        let anchor = canvas
+            .engine_ref()
+            .last_center_point()
+            .map(|(p, _)| p)
+            .unwrap_or_else(|| canvas.engine_ref().camera.viewport_center());
 
         // -------------------------------------------------------------
         // 0. CHẤM TÂM / ĐẶT TÂM HÌNH HỌC: e.g. "chấm tâm O", "chấm tâm", "tâm O"
@@ -697,7 +703,12 @@ impl RnAiMenu {
         // -------------------------------------------------------------
         // 2. EXACT CIRCLE: e.g. "vẽ đường tròn tâm O(200, 200) bán kính 80"
         // -------------------------------------------------------------
-        if norm.contains("tròn") || norm.contains("tron") || norm.contains("circle") {
+        // A circle mentioned alongside another figure ("tam giác nội tiếp đường tròn", "tiếp tuyến đến đường tròn")
+        // belongs to that figure's branch below, not here.
+        let circle_is_secondary = ["giác", "giac", "triangle", "tiếp tuyến", "tiep tuyen", "tangent", "vuông", "vuong", "chữ nhật", "chu nhat"]
+            .iter()
+            .any(|k| norm.contains(k));
+        if (norm.contains("tròn") || norm.contains("tron") || norm.contains("circle")) && !circle_is_secondary {
             let (center_pos, center_label, from_click) = if let Some(pt) = parsed_points.first() {
                 (Vector2::new(pt.x, pt.y), pt.name.clone(), false)
             } else if let Some((pos, lbl)) = canvas.engine_ref().last_center_point() {
@@ -766,8 +777,9 @@ impl RnAiMenu {
                 ));
                 return;
             } else {
-                let p1_id = fig.add_point(Vector2::new(200.0, 300.0), Some("A".to_string()));
-                let p2_id = fig.add_point(Vector2::new(480.0, 300.0), Some("B".to_string()));
+                let (a_pos, b_pos) = (anchor - Vector2::new(140.0, 0.0), anchor + Vector2::new(140.0, 0.0));
+                let p1_id = fig.add_point(a_pos, Some("A".to_string()));
+                let p2_id = fig.add_point(b_pos, Some("B".to_string()));
                 if is_dashed {
                     fig.add_auxiliary_line(p1_id, p2_id, LineType::Segment);
                 } else {
@@ -777,9 +789,10 @@ impl RnAiMenu {
                 let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
                 appwindow.handle_widget_flags(flags, &canvas);
 
-                self.append_ai_message(
-                    "📏 <b>[Dựng Đoạn Thẳng Chính Xác]</b>\nĐã dựng đoạn thẳng <b>AB</b> giữa A(200, 300) và B(480, 300) trên canvas!"
-                );
+                self.append_ai_message(&format!(
+                    "📏 <b>[Dựng Đoạn Thẳng Chính Xác]</b>\nĐã dựng đoạn thẳng <b>AB</b> giữa A({:.0}, {:.0}) và B({:.0}, {:.0}) trên canvas!",
+                    a_pos.x, a_pos.y, b_pos.x, b_pos.y
+                ));
                 return;
             }
         }
@@ -863,8 +876,8 @@ impl RnAiMenu {
         // -------------------------------------------------------------
         if norm.contains("trung điểm") || norm.contains("trung diem") || norm.contains("midpoint") {
             let mut fig = MathFigure::new();
-            let b_pos = Vector2::new(180.0, 360.0);
-            let c_pos = Vector2::new(480.0, 360.0);
+            let b_pos = anchor - Vector2::new(150.0, 0.0);
+            let c_pos = anchor + Vector2::new(150.0, 0.0);
             let m_pos = (b_pos + c_pos) * 0.5;
 
             let pb = fig.add_point(b_pos, Some("B".to_string()));
@@ -1065,9 +1078,9 @@ impl RnAiMenu {
         // 8. CENTERS TOOL CALL
         // -------------------------------------------------------------
         if (norm.contains("4 tâm") || norm.contains("bon tam") || norm.contains("bốn tâm") || norm.contains("các tâm")) && !norm.contains("chấm tâm") {
-            let p1 = Vector2::new(200.0, 360.0);
-            let p2 = Vector2::new(460.0, 360.0);
-            let p3 = Vector2::new(290.0, 180.0);
+            let p1 = anchor + Vector2::new(-130.0, 90.0);
+            let p2 = anchor + Vector2::new(130.0, 90.0);
+            let p3 = anchor + Vector2::new(-40.0, -90.0);
             let mut fig = MathFigure::new();
             let (pa, pb, pc, _, _, _) = fig.build_triangle(p1, p2, p3, Some(["A", "B", "C"]));
             fig.add_triangle_center(pa, pb, pc, TriangleCenterType::Centroid, true);
@@ -1113,6 +1126,11 @@ impl RnAiMenu {
 
             let prompt_owned = prompt.to_string();
             let this = self.clone();
+            // Keep generated coordinates in the visible area instead of a fixed 100-500 box.
+            let coord_hint = format!(
+                "Coordinates are canvas pixels (y grows downward). Place the figure around ({:.0}, {:.0}), within 250 px of it.",
+                anchor.x, anchor.y
+            );
 
             glib::spawn_future_local(async move {
                 let system_prompt = "You are a CAD geometric solver. Return ONLY a valid JSON object with keys: \
@@ -1121,11 +1139,11 @@ impl RnAiMenu {
                 \"lines\": [{\"p1\": \"A\", \"p2\": \"B\", \"style\": \"solid\" or \"dashed\"}], \
                 \"circles\": [{\"center\": \"O\", \"radius\": 80.0}], \
                 \"right_angles\": [{\"vertex\": \"H\", \"arm1\": \"A\", \"arm2\": \"B\"}]. \
-                Coordinates should be in range x: 100-500, y: 100-500.";
+                Every point used in lines, circles and right_angles must be listed in points.";
 
                 let req_body = serde_json::json!({
                     "model": model_name,
-                    "prompt": format!("{system_prompt}\n{center_hint}\n\nUser request: {prompt_owned}"),
+                    "prompt": format!("{system_prompt}\n{coord_hint}\n{center_hint}\n\nUser request: {prompt_owned}"),
                     "stream": false,
                     "format": "json"
                 });
@@ -1144,6 +1162,7 @@ impl RnAiMenu {
                 }).await;
 
                 let mut handled = false;
+                let reachable = matches!(&output, Ok(out) if out.status.success());
                 if let Ok(out) = output {
                     if out.status.success() {
                         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
@@ -1224,7 +1243,11 @@ impl RnAiMenu {
                     }
                 }
 
-                if !handled {
+                if !reachable {
+                    this.append_ai_message(
+                        "⚠️ Không kết nối được Ollama tại <b>127.0.0.1:11434</b>. Hãy chạy <i>ollama serve</i> rồi thử lại.",
+                    );
+                } else if !handled {
                     this.append_ai_message(
                         "💡 <b>PentaPen Geometry AI</b> đã tiếp nhận yêu cầu.\n\n\
                         Bạn có thể ra lệnh cụ thể để AI vẽ tức thì:\n\

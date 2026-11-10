@@ -229,12 +229,6 @@ impl RnShaperPage {
         self.imp().stroke_width_picker.get()
     }
 
-    pub(crate) fn open_math_center_settings(&self) {
-        let imp = self.imp();
-        imp.shapeconfig_popover.popup();
-        imp.math_center_label_row.grab_focus();
-    }
-
     pub(crate) fn init(&self, appwindow: &RnAppWindow) {
         let imp = self.imp();
         let shapeconfig_popover = imp.shapeconfig_popover.get();

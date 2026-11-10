@@ -9,8 +9,9 @@ use crate::strokes::Stroke;
 use crate::{DrawableOnDoc, WidgetFlags};
 use p2d::bounding_volume::Aabb;
 use p2d::math::Vector2;
-use piet::{RenderContext, Text, TextLayoutBuilder};
+use piet::RenderContext;
 use rnote_compose::Transformable;
+use rnote_compose::geometry::{CircleId, MathFigure, PointId};
 use rnote_compose::builders::buildable::{Buildable, BuilderCreator, BuilderProgress};
 use rnote_compose::builders::{
     ArrowBuilder, CoordSystem2DBuilder, CoordSystem3DBuilder, CubBezBuilder, EllipseBuilder,
@@ -45,6 +46,10 @@ pub enum HandleKind {
     CircleCenter,
     /// Circle/ellipse perimeter handle - radial stretching
     CirclePerimeter(usize),
+    /// A MathFigure point. Circle centers carry the figure, other points go through the solver
+    FigurePoint(PointId),
+    /// Perimeter of one MathFigure circle - changes only that radius
+    FigureRadius(CircleId),
 }
 
 /// Data for a shape currently selected for interactive manipulation.
@@ -113,15 +118,19 @@ impl PenBehaviour for Shaper {
         let hit_threshold = 16.0 / zoom;
         let snap_radius = 18.0 / zoom;
 
-        // Track cursor and hover state on Proximity events
         if let PenEvent::Proximity { element, .. } = &event {
             self.last_cursor_pos = Some(element.pos);
-            let candidates = collect_snap_candidates(engine_view.store, None);
-            self.active_snap = find_magnetic_snap(element.pos, &candidates, snap_radius);
+        }
 
-            let new_hover = hit_test_stroke(element.pos, engine_view.store, hit_threshold)
-                .map(|(k, _)| k);
-            if new_hover != self.hovered_stroke || self.active_snap.is_some() {
+        // Hover feedback. While building, Proximity must reach the builder (polyline/polygon previews).
+        if let PenEvent::Proximity { element, .. } = &event
+            && !matches!(self.state, ShaperState::BuildShape { .. })
+        {
+            let prev_snap = self.active_snap;
+            snap_pos(&mut self.active_snap, element.pos, engine_view, None, snap_radius);
+
+            let new_hover = hit_test_stroke(element.pos, engine_view.store, hit_threshold);
+            if new_hover != self.hovered_stroke || self.active_snap != prev_snap {
                 widget_flags.redraw = true;
             }
             self.hovered_stroke = new_hover;
@@ -141,20 +150,9 @@ impl PenBehaviour for Shaper {
             // IDLE STATE
             // ==========================================
             (ShaperState::Idle, PenEvent::Down { mut element, .. }) => {
-                // Check if user clicked directly on an existing shape (Line or Ellipse)
-                if let Some((hit_key, shape)) =
-                    hit_test_stroke(element.pos, engine_view.store, hit_threshold)
+                // Check if user clicked directly on an existing shape
+                if let Some(hit_key) = hit_test_stroke(element.pos, engine_view.store, hit_threshold)
                 {
-                    if matches!(shape, Shape::Ellipse(_))
-                        || match shape {
-                            Shape::MathFigure(ref fig) => {
-                                !fig.circles.is_empty() || !fig.points.is_empty()
-                            }
-                            _ => false,
-                        }
-                    {
-                        widget_flags.open_circle_settings = true;
-                    }
                     self.state = ShaperState::Manipulating {
                         selected: SelectedShapeData { key: hit_key },
                         active_handle: None,
@@ -176,17 +174,8 @@ impl PenBehaviour for Shaper {
                         .shaper_config
                         .new_style_seeds();
 
-                    let candidates = collect_snap_candidates(engine_view.store, None);
-                    if let Some(snap) = find_magnetic_snap(element.pos, &candidates, snap_radius) {
-                        element.pos = snap.point;
-                        self.active_snap = Some(snap);
-                    } else {
-                        element.pos = engine_view
-                            .document
-                            .snap_position(element.pos, engine_view.config);
-                        element.pos = snap_to_math_figure_points(element.pos, engine_view.store);
-                        self.active_snap = None;
-                    }
+                    element.pos =
+                        snap_pos(&mut self.active_snap, element.pos, engine_view, None, snap_radius);
 
                     self.state = ShaperState::BuildShape {
                         builder: new_builder(
@@ -211,27 +200,9 @@ impl PenBehaviour for Shaper {
                     modifier_keys,
                 },
             ) if modifier_keys.is_empty() => {
-                let shaper_config = &mut engine_view.config.pens_config.shaper_config;
-                let handled = match keyboard_key {
-                    KeyboardKey::Unicode('l') | KeyboardKey::Unicode('L') => {
-                        shaper_config.builder_type = ShapeBuilderType::MathLine;
-                        true
-                    }
-                    KeyboardKey::Unicode('r') | KeyboardKey::Unicode('R') => {
-                        shaper_config.builder_type = ShapeBuilderType::MathCircle;
-                        true
-                    }
-                    KeyboardKey::Unicode('s') | KeyboardKey::Unicode('S') => {
-                        shaper_config.builder_type = ShapeBuilderType::Rectangle;
-                        true
-                    }
-                    KeyboardKey::Unicode('p') | KeyboardKey::Unicode('P') => {
-                        shaper_config.builder_type = ShapeBuilderType::MathPoint;
-                        true
-                    }
-                    _ => false,
-                };
-                if handled {
+                let builder_type = shortcut_builder_type(keyboard_key);
+                if let Some(builder_type) = builder_type {
+                    engine_view.config.pens_config.shaper_config.builder_type = builder_type;
                     widget_flags.refresh_ui = true;
                     EventResult {
                         handled: true,
@@ -277,25 +248,12 @@ impl PenBehaviour for Shaper {
                         });
 
                     if let Some(h) = handle {
-                        if matches!(h, HandleKind::CircleCenter | HandleKind::CirclePerimeter(_)) {
-                            widget_flags.open_circle_settings = true;
-                        }
                         *active_handle = Some(h);
                         *last_drag_pos = Some(element.pos);
-                    } else if let Some((other_key, other_shape)) =
+                    } else if let Some(other_key) =
                         hit_test_stroke(element.pos, engine_view.store, hit_threshold)
                     {
                         // Switched selection to another shape
-                        if matches!(other_shape, Shape::Ellipse(_))
-                            || match other_shape {
-                                Shape::MathFigure(ref fig) => {
-                                    !fig.circles.is_empty() || !fig.points.is_empty()
-                                }
-                                _ => false,
-                            }
-                        {
-                            widget_flags.open_circle_settings = true;
-                        }
                         selected.key = other_key;
                         *active_handle = None;
                         *last_drag_pos = Some(element.pos);
@@ -307,9 +265,13 @@ impl PenBehaviour for Shaper {
                             .pens_config
                             .shaper_config
                             .new_style_seeds();
-                        element.pos = engine_view
-                            .document
-                            .snap_position(element.pos, engine_view.config);
+                        element.pos = snap_pos(
+                            &mut self.active_snap,
+                            element.pos,
+                            engine_view,
+                            None,
+                            snap_radius,
+                        );
                         self.state = ShaperState::BuildShape {
                             builder: new_builder(
                                 &engine_view.config.pens_config.shaper_config,
@@ -331,13 +293,16 @@ impl PenBehaviour for Shaper {
 
                 // Dragging the active handle
                 if let Some(handle) = *active_handle {
-                    // Check magnetic snap while dragging handle
-                    let candidates = collect_snap_candidates(engine_view.store, None);
-                    if let Some(snap) = find_magnetic_snap(element.pos, &candidates, snap_radius) {
-                        element.pos = snap.point;
-                        self.active_snap = Some(snap);
-                    } else {
-                        self.active_snap = None;
+                    // Exclude the dragged stroke so a handle can't snap to its own old position.
+                    // Body translation (LineMid) follows the raw cursor, snapping it would make the shape jump.
+                    if handle != HandleKind::LineMid {
+                        element.pos = snap_pos(
+                            &mut self.active_snap,
+                            element.pos,
+                            engine_view,
+                            Some(selected.key),
+                            snap_radius,
+                        );
                     }
 
                     apply_handle_drag(
@@ -388,94 +353,72 @@ impl PenBehaviour for Shaper {
                     keyboard_key,
                     modifier_keys,
                 },
-            ) if modifier_keys.is_empty() => match keyboard_key {
-                KeyboardKey::Escape => {
-                    self.state = ShaperState::Idle;
-                    self.active_snap = None;
-                    widget_flags.redraw = true;
+            ) if modifier_keys.is_empty() => {
+                let key = selected.key;
+                // Rename target: the point under the cursor, or the only point of a lone-point figure.
+                let rename_target = figure_of(engine_view.store, key).and_then(|fig| {
+                    self.last_cursor_pos
+                        .and_then(|pos| nearest_figure_point(fig, pos, hit_threshold))
+                        .or_else(|| {
+                            (fig.points.len() == 1).then(|| *fig.points.keys().next().unwrap())
+                        })
+                });
 
-                    EventResult {
-                        handled: true,
-                        propagate: EventPropagation::Stop,
-                        progress: PenProgress::Finished,
-                    }
-                }
-                KeyboardKey::Unicode('l') | KeyboardKey::Unicode('L') => {
-                    engine_view.config.pens_config.shaper_config.builder_type =
-                        ShapeBuilderType::MathLine;
-                    self.state = ShaperState::Idle;
-                    widget_flags.refresh_ui = true;
-                    widget_flags.redraw = true;
-                    EventResult {
-                        handled: true,
-                        propagate: EventPropagation::Stop,
-                        progress: PenProgress::Idle,
-                    }
-                }
-                KeyboardKey::Unicode('r') | KeyboardKey::Unicode('R') => {
-                    engine_view.config.pens_config.shaper_config.builder_type =
-                        ShapeBuilderType::MathCircle;
-                    self.state = ShaperState::Idle;
-                    widget_flags.refresh_ui = true;
-                    widget_flags.redraw = true;
-                    EventResult {
-                        handled: true,
-                        propagate: EventPropagation::Stop,
-                        progress: PenProgress::Idle,
-                    }
-                }
-                KeyboardKey::Unicode('s') | KeyboardKey::Unicode('S') => {
-                    engine_view.config.pens_config.shaper_config.builder_type =
-                        ShapeBuilderType::Rectangle;
-                    self.state = ShaperState::Idle;
-                    widget_flags.refresh_ui = true;
-                    widget_flags.redraw = true;
-                    EventResult {
-                        handled: true,
-                        propagate: EventPropagation::Stop,
-                        progress: PenProgress::Idle,
-                    }
-                }
-                KeyboardKey::Unicode('p') | KeyboardKey::Unicode('P') => {
-                    engine_view.config.pens_config.shaper_config.builder_type =
-                        ShapeBuilderType::MathPoint;
-                    self.state = ShaperState::Idle;
-                    widget_flags.refresh_ui = true;
-                    widget_flags.redraw = true;
-                    EventResult {
-                        handled: true,
-                        propagate: EventPropagation::Stop,
-                        progress: PenProgress::Idle,
-                    }
-                }
-                KeyboardKey::Unicode(c) if c.is_alphanumeric() => {
-                    let new_label = c.to_uppercase().to_string();
-                    engine_view.config.pens_config.shaper_config.math_center_label =
-                        new_label.clone();
-                    if let Some(Stroke::ShapeStroke(ss)) =
-                        engine_view.store.get_stroke_mut(selected.key)
-                    {
-                        if let Shape::MathFigure(fig) = &mut ss.shape {
-                            for pt in fig.points.values_mut() {
-                                pt.label = Some(new_label.clone());
-                            }
-                            widget_flags.store_modified = true;
+                match keyboard_key {
+                    KeyboardKey::Escape => {
+                        self.state = ShaperState::Idle;
+                        self.active_snap = None;
+                        widget_flags.redraw = true;
+
+                        EventResult {
+                            handled: true,
+                            propagate: EventPropagation::Stop,
+                            progress: PenProgress::Finished,
                         }
                     }
-                    widget_flags.refresh_ui = true;
-                    widget_flags.redraw = true;
-                    EventResult {
-                        handled: true,
-                        propagate: EventPropagation::Stop,
-                        progress: PenProgress::InProgress,
+                    // Renaming wins over tool shortcuts while a point is targeted, so L/R/S/P are valid names.
+                    KeyboardKey::Unicode(c) if c.is_alphanumeric() && rename_target.is_some() => {
+                        if let Some(Stroke::ShapeStroke(ss)) = engine_view.store.get_stroke_mut(key)
+                            && let Shape::MathFigure(fig) = &mut ss.shape
+                            && let Some(pt) = rename_target.and_then(|id| fig.points.get_mut(&id))
+                        {
+                            pt.label = Some(c.to_uppercase().to_string());
+                        }
+                        engine_view.store.regenerate_rendering_for_stroke(
+                            key,
+                            engine_view.camera.viewport(),
+                            engine_view.camera.image_scale(),
+                        );
+                        widget_flags |= engine_view.store.record(Instant::now());
+                        widget_flags.store_modified = true;
+                        widget_flags.redraw = true;
+                        EventResult {
+                            handled: true,
+                            propagate: EventPropagation::Stop,
+                            progress: PenProgress::InProgress,
+                        }
                     }
+                    k => match shortcut_builder_type(k) {
+                        Some(builder_type) => {
+                            engine_view.config.pens_config.shaper_config.builder_type =
+                                builder_type;
+                            self.state = ShaperState::Idle;
+                            widget_flags.refresh_ui = true;
+                            widget_flags.redraw = true;
+                            EventResult {
+                                handled: true,
+                                propagate: EventPropagation::Stop,
+                                progress: PenProgress::Idle,
+                            }
+                        }
+                        None => EventResult {
+                            handled: false,
+                            propagate: EventPropagation::Proceed,
+                            progress: PenProgress::Idle,
+                        },
+                    },
                 }
-                _ => EventResult {
-                    handled: false,
-                    propagate: EventPropagation::Proceed,
-                    progress: PenProgress::Idle,
-                },
-            },
+            }
 
             (ShaperState::Manipulating { .. }, _) => EventResult {
                 handled: false,
@@ -522,21 +465,17 @@ impl PenBehaviour for Shaper {
 
                 // Magnetic Snapping during building
                 match &mut event {
-                    PenEvent::Down { element, .. } | PenEvent::Up { element, .. } => {
-                        let candidates = collect_snap_candidates(engine_view.store, None);
-                        if let Some(snap) =
-                            find_magnetic_snap(element.pos, &candidates, snap_radius)
-                        {
-                            element.pos = snap.point;
-                            self.active_snap = Some(snap);
-                        } else {
-                            element.pos = engine_view
-                                .document
-                                .snap_position(element.pos, engine_view.config);
-                            element.pos =
-                                snap_to_math_figure_points(element.pos, engine_view.store);
-                            self.active_snap = None;
-                        }
+                    PenEvent::Down { element, .. }
+                    | PenEvent::Up { element, .. }
+                    | PenEvent::Proximity { element, .. } => {
+                        element.pos = snap_pos(
+                            &mut self.active_snap,
+                            element.pos,
+                            engine_view,
+                            None,
+                            snap_radius,
+                        );
+                        widget_flags.redraw = true;
                     }
                     _ => {}
                 }
@@ -803,18 +742,6 @@ fn draw_manipulating_handles(
                 1.5 / zoom,
             );
 
-            // Center badge
-            if let Ok(layout) = cx
-                .text()
-                .new_text_layout("⚙ Tâm: O (Click cài đặt)".to_string())
-                .font(piet::FontFamily::SANS_SERIF, 11.5 / zoom)
-                .text_color(piet::Color::rgba8(28, 113, 216, 255))
-                .build()
-            {
-                let badge_pos = kurbo::Point::new(center.x - 45.0 / zoom, center.y - 20.0 / zoom);
-                cx.draw_text(&layout, badge_pos);
-            }
-
             // 4 Perimeter handles
             let cardinal = [
                 center + Vector2::new(r, 0.0),
@@ -829,98 +756,24 @@ fn draw_manipulating_handles(
             }
         }
         Shape::MathFigure(fig) => {
-            // Circles in MathFigure
             for c in fig.circles.values() {
                 if let Some(center) = fig.points.get(&c.center) {
-                    let perimeter_pos = c
-                        .through_point
-                        .and_then(|tp| fig.points.get(&tp))
-                        .map(|p| p.pos)
-                        .unwrap_or_else(|| center.pos + Vector2::new(c.radius, 0.0));
-                    let r = (perimeter_pos - center.pos).length().max(c.radius);
-                    let circle_k = kurbo::Circle::new(center.pos.to_kurbo_point(), r);
-                    cx.stroke(circle_k, &line_dash_color, 1.5 / zoom);
-
-                    // Center handle
-                    let circle_o = kurbo::Circle::new(center.pos.to_kurbo_point(), 6.0 / zoom);
-                    cx.fill(circle_o, &white_fill);
-                    cx.stroke(circle_o, &border_color, 2.0 / zoom);
-                    let dot_o = kurbo::Circle::new(center.pos.to_kurbo_point(), 2.0 / zoom);
-                    cx.fill(dot_o, &border_color);
-
-                    // Perimeter handle
-                    let circle_p = kurbo::Circle::new(perimeter_pos.to_kurbo_point(), 5.0 / zoom);
-                    cx.fill(circle_p, &white_fill);
-                    cx.stroke(circle_p, &border_color, 2.0 / zoom);
-
-                    // Radius guide
-                    cx.stroke(
-                        kurbo::Line::new(
-                            center.pos.to_kurbo_point(),
-                            perimeter_pos.to_kurbo_point(),
-                        ),
-                        &line_dash_color,
-                        1.5 / zoom,
-                    );
-
-                    let c_lbl = center.label.as_deref().unwrap_or("O");
-                    if let Ok(layout) = cx
-                        .text()
-                        .new_text_layout(format!("⚙ Tâm: {c_lbl} (Click cài đặt)"))
-                        .font(piet::FontFamily::SANS_SERIF, 11.5 / zoom)
-                        .text_color(piet::Color::rgba8(28, 113, 216, 255))
-                        .build()
-                    {
-                        let badge_pos =
-                            kurbo::Point::new(center.pos.x - 45.0 / zoom, center.pos.y - 20.0 / zoom);
-                        cx.draw_text(&layout, badge_pos);
-                    }
+                    let ring = kurbo::Circle::new(center.pos.to_kurbo_point(), c.radius);
+                    cx.stroke(ring, &line_dash_color, 1.5 / zoom);
                 }
             }
-
-            // Lines in MathFigure
             for l in fig.lines.values() {
                 if let (Some(p1), Some(p2)) = (fig.points.get(&l.p1), fig.points.get(&l.p2)) {
                     let k_line =
                         kurbo::Line::new(p1.pos.to_kurbo_point(), p2.pos.to_kurbo_point());
                     cx.stroke(k_line, &line_dash_color, 2.0 / zoom);
-
-                    let circle_a = kurbo::Circle::new(p1.pos.to_kurbo_point(), 6.0 / zoom);
-                    cx.fill(circle_a, &white_fill);
-                    cx.stroke(circle_a, &border_color, 2.0 / zoom);
-
-                    let circle_b = kurbo::Circle::new(p2.pos.to_kurbo_point(), 6.0 / zoom);
-                    cx.fill(circle_b, &white_fill);
-                    cx.stroke(circle_b, &border_color, 2.0 / zoom);
-
-                    let m = (p1.pos + p2.pos) * 0.5;
-                    let half = 4.5 / zoom;
-                    let rect_m = kurbo::Rect::new(m.x - half, m.y - half, m.x + half, m.y + half);
-                    cx.fill(rect_m, &white_fill);
-                    cx.stroke(rect_m, &piet::Color::rgba8(46, 194, 126, 255), 2.0 / zoom);
                 }
             }
-
-            // Standalone points (MathPoint)
-            if fig.circles.is_empty() && fig.lines.is_empty() {
-                for p in fig.points.values() {
-                    let circle_pt = kurbo::Circle::new(p.pos.to_kurbo_point(), 6.0 / zoom);
-                    cx.fill(circle_pt, &white_fill);
-                    cx.stroke(circle_pt, &border_color, 2.0 / zoom);
-
-                    let lbl = p.label.as_deref().unwrap_or("A");
-                    if let Ok(layout) = cx
-                        .text()
-                        .new_text_layout(format!("Điểm {lbl}"))
-                        .font(piet::FontFamily::SANS_SERIF, 12.0 / zoom)
-                        .text_color(piet::Color::rgba8(28, 113, 216, 255))
-                        .build()
-                    {
-                        let badge_pos =
-                            kurbo::Point::new(p.pos.x + 8.0 / zoom, p.pos.y - 18.0 / zoom);
-                        cx.draw_text(&layout, badge_pos);
-                    }
-                }
+            // Every point is a drag handle (see hit_test_handle)
+            for p in fig.points.values() {
+                let h = kurbo::Circle::new(p.pos.to_kurbo_point(), 6.0 / zoom);
+                cx.fill(h, &white_fill);
+                cx.stroke(h, &border_color, 2.0 / zoom);
             }
         }
         _ => {}
@@ -1035,49 +888,23 @@ fn hit_test_stroke(
     pos: Vector2,
     store: &crate::store::StrokeStore,
     threshold: f64,
-) -> Option<(StrokeKey, Shape)> {
-    for key in store.stroke_keys_unordered() {
-        if let Some(Stroke::ShapeStroke(ss)) = store.get_stroke_ref(key) {
-            let hit = match &ss.shape {
-                Shape::Line(line) => dist_to_segment(pos, line.start, line.end) <= threshold,
-                Shape::Ellipse(ellipse) => {
-                    let center = ellipse.affine.translation;
-                    let r = (ellipse.radii.x + ellipse.radii.y) * 0.5;
-                    let d_center = (pos - center).length();
-                    d_center <= threshold || (d_center - r).abs() <= threshold
-                }
-                Shape::MathFigure(fig) => {
-                    let hit_pt = fig.points.values().any(|p| (p.pos - pos).length() <= threshold);
-                    let hit_line = fig.lines.values().any(|l| {
-                        if let (Some(p1), Some(p2)) = (fig.points.get(&l.p1), fig.points.get(&l.p2)) {
-                            dist_to_segment(pos, p1.pos, p2.pos) <= threshold
-                        } else {
-                            false
-                        }
-                    });
-                    let hit_circle = fig.circles.values().any(|c| {
-                        if let Some(center) = fig.points.get(&c.center) {
-                            let r = c
-                                .through_point
-                                .and_then(|tp| fig.points.get(&tp))
-                                .map(|p| (p.pos - center.pos).length())
-                                .unwrap_or(c.radius);
-                            let d = (pos - center.pos).length();
-                            d <= threshold || (d - r).abs() <= threshold
-                        } else {
-                            false
-                        }
-                    });
-                    hit_pt || hit_line || hit_circle
-                }
-                _ => false,
-            };
-            if hit {
-                return Some((key, ss.shape.clone()));
+) -> Option<StrokeKey> {
+    store.stroke_keys_unordered().into_iter().find(|&key| {
+        let Some(Stroke::ShapeStroke(ss)) = store.get_stroke_ref(key) else {
+            return false;
+        };
+        match &ss.shape {
+            Shape::Line(line) => dist_to_segment(pos, line.start, line.end) <= threshold,
+            Shape::Ellipse(ellipse) => {
+                let center = ellipse.affine.translation;
+                let r = (ellipse.radii.x + ellipse.radii.y) * 0.5;
+                let d_center = (pos - center).length();
+                d_center <= threshold || (d_center - r).abs() <= threshold
             }
+            Shape::MathFigure(_) => hit_test_handle(pos, &ss.shape, threshold).is_some(),
+            _ => false,
         }
-    }
-    None
+    })
 }
 
 fn hit_test_handle(pos: Vector2, shape: &Shape, threshold: f64) -> Option<HandleKind> {
@@ -1088,10 +915,6 @@ fn hit_test_handle(pos: Vector2, shape: &Shape, threshold: f64) -> Option<Handle
             }
             if (pos - line.end).length() <= threshold {
                 return Some(HandleKind::LineEnd);
-            }
-            let m = (line.start + line.end) * 0.5;
-            if (pos - m).length() <= threshold {
-                return Some(HandleKind::LineMid);
             }
             if dist_to_segment(pos, line.start, line.end) <= threshold {
                 return Some(HandleKind::LineMid);
@@ -1121,48 +944,24 @@ fn hit_test_handle(pos: Vector2, shape: &Shape, threshold: f64) -> Option<Handle
             None
         }
         Shape::MathFigure(fig) => {
-            for c in fig.circles.values() {
-                if let Some(center) = fig.points.get(&c.center) {
-                    let r = c
-                        .through_point
-                        .and_then(|tp| fig.points.get(&tp))
-                        .map(|p| (p.pos - center.pos).length())
-                        .unwrap_or(c.radius);
-                    if (pos - center.pos).length() <= threshold {
-                        return Some(HandleKind::CircleCenter);
-                    }
-                    if let Some(through) = c.through_point.and_then(|tp| fig.points.get(&tp)) {
-                        if (pos - through.pos).length() <= threshold {
-                            return Some(HandleKind::CirclePerimeter(0));
-                        }
-                    }
-                    if ((pos - center.pos).length() - r).abs() <= threshold {
-                        return Some(HandleKind::CirclePerimeter(0));
-                    }
+            // Points first, nearest wins, so the grabbed handle never depends on HashMap order.
+            if let Some(id) = nearest_figure_point(fig, pos, threshold) {
+                return Some(HandleKind::FigurePoint(id));
+            }
+            for (&cid, c) in &fig.circles {
+                if let Some(center) = fig.points.get(&c.center)
+                    && ((pos - center.pos).length() - c.radius).abs() <= threshold
+                {
+                    return Some(HandleKind::FigureRadius(cid));
                 }
             }
-            for l in fig.lines.values() {
-                if let (Some(p1), Some(p2)) = (fig.points.get(&l.p1), fig.points.get(&l.p2)) {
-                    if (pos - p1.pos).length() <= threshold {
-                        return Some(HandleKind::LineStart);
-                    }
-                    if (pos - p2.pos).length() <= threshold {
-                        return Some(HandleKind::LineEnd);
-                    }
-                    let m = (p1.pos + p2.pos) * 0.5;
-                    if (pos - m).length() <= threshold
-                        || dist_to_segment(pos, p1.pos, p2.pos) <= threshold
-                    {
-                        return Some(HandleKind::LineMid);
-                    }
-                }
-            }
-            for p in fig.points.values() {
-                if (pos - p.pos).length() <= threshold {
-                    return Some(HandleKind::CircleCenter);
-                }
-            }
-            None
+            fig.lines
+                .values()
+                .any(|l| match (fig.points.get(&l.p1), fig.points.get(&l.p2)) {
+                    (Some(p1), Some(p2)) => dist_to_segment(pos, p1.pos, p2.pos) <= threshold,
+                    _ => false,
+                })
+                .then_some(HandleKind::LineMid)
         }
         _ => None,
     }
@@ -1189,52 +988,37 @@ fn apply_handle_drag(
                 }
             }
             (Shape::Ellipse(ellipse), HandleKind::CircleCenter) => {
-                if let Some(prev) = last_drag_pos {
-                    ellipse.translate(current_pos - prev);
-                }
+                // Absolute: the center lands exactly on the (snapped) cursor, no drift
+                let offset = current_pos - ellipse.affine.translation;
+                ellipse.translate(offset);
             }
             (Shape::Ellipse(ellipse), HandleKind::CirclePerimeter(_)) => {
                 let center = ellipse.affine.translation;
                 let new_radius = (current_pos - center).length().max(2.0);
                 ellipse.radii = Vector2::new(new_radius, new_radius);
             }
-            (Shape::MathFigure(fig), HandleKind::CircleCenter) => {
-                if let Some(prev) = last_drag_pos {
-                    fig.translate(current_pos - prev);
-                }
-            }
-            (Shape::MathFigure(fig), HandleKind::CirclePerimeter(_)) => {
-                for c in fig.circles.values_mut() {
-                    if let Some(center) = fig.points.get(&c.center).map(|p| p.pos) {
-                        let diff = current_pos - center;
-                        let new_r = diff.length().max(5.0);
-                        c.radius = new_r;
-                        if let Some(through_id) = c.through_point {
-                            if let Some(through) = fig.points.get_mut(&through_id) {
-                                let dir = if new_r > 1e-6 {
-                                    diff.normalize()
-                                } else {
-                                    Vector2::new(1.0, 0.0)
-                                };
-                                through.pos = center + dir * new_r;
-                            }
-                        }
+            (Shape::MathFigure(fig), HandleKind::FigurePoint(id)) => {
+                if fig.circles.values().any(|c| c.center == id) {
+                    // Dragging a circle center carries the whole figure
+                    if let Some(p) = fig.points.get(&id) {
+                        let offset = current_pos - p.pos;
+                        fig.translate(offset);
                     }
+                } else {
+                    fig.drag_point(id, current_pos);
                 }
             }
-            (Shape::MathFigure(fig), HandleKind::LineStart) => {
-                if let Some(l) = fig.lines.values().next() {
-                    let p1_id = l.p1;
-                    if let Some(p) = fig.points.get_mut(&p1_id) {
-                        p.pos = current_pos;
-                    }
-                }
-            }
-            (Shape::MathFigure(fig), HandleKind::LineEnd) => {
-                if let Some(l) = fig.lines.values().next() {
-                    let p2_id = l.p2;
-                    if let Some(p) = fig.points.get_mut(&p2_id) {
-                        p.pos = current_pos;
+            (Shape::MathFigure(fig), HandleKind::FigureRadius(cid)) => {
+                if let Some(c) = fig.circles.get_mut(&cid)
+                    && let Some(center) = fig.points.get(&c.center).map(|p| p.pos)
+                {
+                    let diff = current_pos - center;
+                    c.radius = diff.length().max(5.0);
+                    if let Some(through) = c.through_point.and_then(|id| fig.points.get_mut(&id)) {
+                        let dir = diff
+                            .try_normalize()
+                            .unwrap_or_else(|| Vector2::new(1.0, 0.0));
+                        through.pos = center + dir * c.radius;
                     }
                 }
             }
@@ -1265,45 +1049,94 @@ fn dist_to_segment(p: Vector2, a: Vector2, b: Vector2) -> f64 {
     (p - proj).length()
 }
 
+fn figure_of(store: &crate::store::StrokeStore, key: StrokeKey) -> Option<&MathFigure> {
+    match store.get_stroke_ref(key) {
+        Some(Stroke::ShapeStroke(ss)) => match &ss.shape {
+            Shape::MathFigure(fig) => Some(fig),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The figure point nearest to `pos`, if within `threshold`.
+fn nearest_figure_point(fig: &MathFigure, pos: Vector2, threshold: f64) -> Option<PointId> {
+    fig.points
+        .iter()
+        .map(|(&id, p)| (id, (p.pos - pos).length()))
+        .filter(|&(_, d)| d <= threshold)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(id, _)| id)
+}
+
+fn shortcut_builder_type(key: KeyboardKey) -> Option<ShapeBuilderType> {
+    match key {
+        KeyboardKey::Unicode('l' | 'L') => Some(ShapeBuilderType::MathLine),
+        KeyboardKey::Unicode('r' | 'R') => Some(ShapeBuilderType::MathCircle),
+        KeyboardKey::Unicode('s' | 'S') => Some(ShapeBuilderType::Rectangle),
+        KeyboardKey::Unicode('p' | 'P') => Some(ShapeBuilderType::MathPoint),
+        _ => None,
+    }
+}
+
+/// Magnetic snap, falling back to grid snap. Updates `active_snap` for the overlay.
+/// `exclude` is the stroke being edited, so its own points cannot capture the cursor.
+fn snap_pos(
+    active_snap: &mut Option<SnapCandidate>,
+    pos: Vector2,
+    engine_view: &EngineViewMut,
+    exclude: Option<StrokeKey>,
+    snap_radius: f64,
+) -> Vector2 {
+    let candidates = collect_snap_candidates(engine_view.store, exclude);
+    // Hysteresis: hold the previous snap a bit past the radius so it does not flicker at the edge.
+    let held = active_snap.filter(|prev| {
+        (prev.point - pos).length() <= snap_radius * 1.3
+            && candidates.iter().any(|c| c.point == prev.point)
+    });
+    *active_snap = find_magnetic_snap(pos, &candidates, snap_radius).or(held);
+    match *active_snap {
+        Some(snap) => snap.point,
+        None => engine_view.document.snap_position(pos, engine_view.config),
+    }
+}
+
 fn collect_snap_candidates(
     store: &crate::store::StrokeStore,
-    _current_line_start: Option<Vector2>,
+    exclude: Option<StrokeKey>,
 ) -> Vec<SnapCandidate> {
     let mut candidates = Vec::new();
     let mut lines: Vec<(Vector2, Vector2)> = Vec::new();
     let mut circles: Vec<(Vector2, f64)> = Vec::new();
 
+    let mut push_segment = |candidates: &mut Vec<SnapCandidate>, a: Vector2, b: Vector2| {
+        let m = compute_segment_midpoint(a, b);
+        candidates.push(SnapCandidate::new(
+            m,
+            SnapKind::Midpoint { point: m, a, b },
+            SnapPriority::Midpoint,
+        ));
+        lines.push((a, b));
+    };
+
     for key in store.stroke_keys_unordered() {
+        if Some(key) == exclude {
+            continue;
+        }
         if let Some(Stroke::ShapeStroke(ss)) = store.get_stroke_ref(key) {
             match &ss.shape {
                 Shape::Line(line) => {
-                    candidates.push(SnapCandidate::new(
-                        line.start,
-                        SnapKind::Point {
-                            point: line.start,
-                            label: None,
-                        },
-                        SnapPriority::KeyPoint,
-                    ));
-                    candidates.push(SnapCandidate::new(
-                        line.end,
-                        SnapKind::Point {
-                            point: line.end,
-                            label: None,
-                        },
-                        SnapPriority::KeyPoint,
-                    ));
-                    let m = compute_segment_midpoint(line.start, line.end);
-                    candidates.push(SnapCandidate::new(
-                        m,
-                        SnapKind::Midpoint {
-                            point: m,
-                            a: line.start,
-                            b: line.end,
-                        },
-                        SnapPriority::Midpoint,
-                    ));
-                    lines.push((line.start, line.end));
+                    for p in [line.start, line.end] {
+                        candidates.push(SnapCandidate::new(
+                            p,
+                            SnapKind::Point {
+                                point: p,
+                                label: None,
+                            },
+                            SnapPriority::KeyPoint,
+                        ));
+                    }
+                    push_segment(&mut candidates, line.start, line.end);
                 }
                 Shape::Ellipse(ellipse) => {
                     let center = ellipse.affine.translation;
@@ -1344,11 +1177,25 @@ fn collect_snap_candidates(
                             SnapPriority::KeyPoint,
                         ));
                     }
+                    // Figure lines/circles take part in midpoint and intersection snapping too
+                    for l in fig.lines.values() {
+                        if let (Some(a), Some(b)) = (fig.points.get(&l.p1), fig.points.get(&l.p2)) {
+                            push_segment(&mut candidates, a.pos, b.pos);
+                        }
+                    }
+                    for c in fig.circles.values() {
+                        if let Some(center) = fig.points.get(&c.center)
+                            && c.radius > 1.0
+                        {
+                            circles.push((center.pos, c.radius));
+                        }
+                    }
                 }
                 _ => {}
             }
         }
     }
+    drop(push_segment);
 
     // Pairwise line-line intersections
     for i in 0..lines.len() {
@@ -1449,27 +1296,6 @@ fn collect_snap_candidates(
     candidates
 }
 
-fn snap_to_math_figure_points(pos: Vector2, store: &crate::store::StrokeStore) -> Vector2 {
-    let snap_threshold_sq = 16.0 * 16.0;
-    let mut closest_dist_sq = f64::MAX;
-    let mut snapped_pos = pos;
-
-    for key in store.stroke_keys_unordered() {
-        if let Some(Stroke::ShapeStroke(shape_stroke)) = store.get_stroke_ref(key) {
-            if let Shape::MathFigure(ref fig) = shape_stroke.shape {
-                for pt in fig.points.values() {
-                    let d_sq = (pt.pos - pos).length_squared();
-                    if d_sq <= snap_threshold_sq && d_sq < closest_dist_sq {
-                        closest_dist_sq = d_sq;
-                        snapped_pos = pt.pos;
-                    }
-                }
-            }
-        }
-    }
-    snapped_pos
-}
-
 fn new_builder(
     shaper_config: &ShaperConfig,
     element: Element,
@@ -1507,5 +1333,37 @@ fn new_builder(
             Some("B".to_string()),
             shaper_config.math_auto_intersections,
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn figure_handles_pick_the_right_entity() {
+        let mut fig = MathFigure::new();
+        let a = fig.add_point(Vector2::new(0.0, 0.0), Some("A".into()));
+        let b = fig.add_point(Vector2::new(10.0, 0.0), Some("B".into()));
+        fig.add_segment(a, b);
+        let o = fig.add_point(Vector2::new(100.0, 0.0), Some("O".into()));
+        let c = fig.add_circle_radius(o, 50.0);
+        let shape = Shape::MathFigure(fig);
+
+        // Both A and B are within the threshold: the nearer one wins, independent of map order
+        assert_eq!(
+            hit_test_handle(Vector2::new(7.0, 0.0), &shape, 8.0),
+            Some(HandleKind::FigurePoint(b))
+        );
+        assert_eq!(
+            hit_test_handle(Vector2::new(2.0, 0.0), &shape, 8.0),
+            Some(HandleKind::FigurePoint(a))
+        );
+        // On the perimeter of that specific circle
+        assert_eq!(
+            hit_test_handle(Vector2::new(150.0, 1.0), &shape, 4.0),
+            Some(HandleKind::FigureRadius(c))
+        );
+        assert_eq!(hit_test_handle(Vector2::new(5.0, 30.0), &shape, 4.0), None);
     }
 }

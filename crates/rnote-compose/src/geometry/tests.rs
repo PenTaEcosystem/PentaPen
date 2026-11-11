@@ -298,4 +298,39 @@ fn test_intersections_with_other_shapes() {
         &[],
     );
     assert!(none.is_empty());
+
+    // Original segment A->B must be split into 4 sub-segments by the 3 interior intersection points
+    assert_eq!(fig.lines.len(), 4);
+}
+
+#[test]
+fn test_split_segments_at_intersection_allows_dragging_crossing() {
+    let mut fig = MathFigure::new();
+    let (_a, _b, _l1) = fig.build_line(
+        Vector2::new(0.0, 0.0),
+        Vector2::new(100.0, 0.0),
+        Some("A"),
+        Some("B"),
+    );
+    let (_c, _d, _l2) = fig.build_line(
+        Vector2::new(50.0, -40.0),
+        Vector2::new(50.0, 40.0),
+        Some("C"),
+        Some("D"),
+    );
+    let inters = fig.auto_detect_intersections();
+    assert_eq!(inters.len(), 1);
+    let x_id = inters[0];
+    // Both lines should be split at x_id -> 4 sub-segments connected to x_id
+    assert_eq!(fig.lines.len(), 4);
+    let connected = fig
+        .lines
+        .values()
+        .filter(|l| l.p1 == x_id || l.p2 == x_id)
+        .count();
+    assert_eq!(connected, 4);
+
+    // Dragging the intersection point moves the vertex of all 4 sub-segments
+    assert!(fig.drag_point(x_id, Vector2::new(60.0, 15.0)));
+    assert!((fig.points[&x_id].pos - Vector2::new(60.0, 15.0)).length() < 1e-6);
 }

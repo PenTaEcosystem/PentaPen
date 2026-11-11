@@ -116,22 +116,46 @@ pub fn draw_math_figure(
     }
 
     // 4. Draw Points & Labels
-    const POINT_DOT_RADIUS: f64 = 2.8;
+    const POINT_DOT_RADIUS: f64 = 3.2;
+    let white_brush = cx.solid_brush(Color::rgba8(255, 255, 255, 245));
+    let inter_ring_brush = cx.solid_brush(Color::rgba8(28, 113, 216, 235));
+    let inter_fill_brush = cx.solid_brush(Color::rgba8(255, 255, 255, 250));
+
     for pt in figure.points.values() {
         if !pt.visible {
             continue;
         }
-        // Small filled circle for point vertex
-        let dot = kurbo::Circle::new(kurbo::Point::new(pt.pos.x, pt.pos.y), POINT_DOT_RADIUS);
-        cx.fill(dot, &stroke_brush);
+        let p = kurbo::Point::new(pt.pos.x, pt.pos.y);
 
-        // A ring marks centers (O) and unnamed points, which are mostly intersections
-        if pt.label.is_none() || pt.label.as_deref() == Some("O") {
-            let ring = kurbo::Circle::new(
-                kurbo::Point::new(pt.pos.x, pt.pos.y),
-                POINT_DOT_RADIUS * 2.2,
+        // Count how many segments meet at this point
+        let deg = figure
+            .lines
+            .values()
+            .filter(|l| l.visible && (l.p1 == pt.id || l.p2 == pt.id))
+            .count();
+
+        // Unnamed points or multi-segment crossings pop out prominently as selectable intersection handles
+        let is_intersection = pt.label.is_none() || deg >= 3;
+        if is_intersection {
+            let outer_ring = kurbo::Circle::new(p, 5.8);
+            cx.fill(outer_ring, &inter_fill_brush);
+            cx.stroke(
+                outer_ring,
+                &inter_ring_brush,
+                (stroke_width * 0.85).max(1.8),
             );
-            cx.stroke(ring, &stroke_brush, stroke_width * 0.7);
+            let inner_dot = kurbo::Circle::new(p, 2.6);
+            cx.fill(inner_dot, &inter_ring_brush);
+        } else {
+            let halo = kurbo::Circle::new(p, POINT_DOT_RADIUS + 1.6);
+            cx.fill(halo, &white_brush);
+            let dot = kurbo::Circle::new(p, POINT_DOT_RADIUS);
+            cx.fill(dot, &stroke_brush);
+
+            if pt.label.as_deref() == Some("O") {
+                let ring = kurbo::Circle::new(p, POINT_DOT_RADIUS * 2.1);
+                cx.stroke(ring, &stroke_brush, stroke_width * 0.7);
+            }
         }
 
         // Point label

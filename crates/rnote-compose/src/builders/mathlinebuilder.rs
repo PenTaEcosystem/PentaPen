@@ -77,14 +77,27 @@ impl Buildable for MathLineBuilder {
         &mut self,
         event: PenEvent,
         _now: Instant,
-        constraints: Constraints,
+        mut constraints: Constraints,
     ) -> EventResult<BuilderProgress<Self::Emit>> {
+        constraints
+            .ratios
+            .insert(crate::constraints::ConstraintRatio::Horizontal);
+        constraints
+            .ratios
+            .insert(crate::constraints::ConstraintRatio::Vertical);
+        constraints
+            .ratios
+            .insert(crate::constraints::ConstraintRatio::OneToOne);
+
         let progress = match event {
-            PenEvent::Down { element, .. } => {
+            PenEvent::Down { element, .. } | PenEvent::Proximity { element, .. } => {
                 self.current = constraints.constrain(element.pos - self.start) + self.start;
                 BuilderProgress::InProgress
             }
-            PenEvent::Up { .. } => {
+            PenEvent::Up { element, .. } => {
+                if (element.pos - self.start).length() >= 1.0 {
+                    self.current = constraints.constrain(element.pos - self.start) + self.start;
+                }
                 BuilderProgress::Finished(vec![Shape::MathFigure(self.build_math_figure())])
             }
             PenEvent::KeyPressed { keyboard_key, .. } => match keyboard_key {
@@ -120,5 +133,9 @@ impl Buildable for MathLineBuilder {
         indicators::draw_pos_indicator(cx, PenState::Down, self.start, zoom);
         indicators::draw_pos_indicator(cx, PenState::Down, self.current, zoom);
         cx.restore().unwrap();
+    }
+
+    fn active_segment(&self) -> Option<(Vector2, Vector2)> {
+        ((self.current - self.start).length() >= 2.0).then_some((self.start, self.current))
     }
 }

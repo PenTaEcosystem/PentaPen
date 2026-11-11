@@ -17,6 +17,7 @@ pub struct MathTriangleBuilder {
     start: Vector2,
     current: Vector2,
     labels: [String; 3],
+    equilateral: bool,
 }
 
 impl BuilderCreator for MathTriangleBuilder {
@@ -32,6 +33,7 @@ impl MathTriangleBuilder {
             start: element.pos,
             current: element.pos,
             labels,
+            equilateral: false,
         }
     }
 
@@ -44,8 +46,8 @@ impl MathTriangleBuilder {
         let width = max_x - min_x;
         let height = max_y - min_y;
 
-        let (a, b, c) = if width < 30.0 || height < 30.0 {
-            // Default scalene triangle if simply clicked or tiny drag
+        let (a, b, c) = if width < 30.0 && height < 30.0 {
+            // Default triangle if simply clicked or tiny drag
             let cx = self.start.x;
             let cy = self.start.y;
             let w = 240.0;
@@ -54,6 +56,16 @@ impl MathTriangleBuilder {
                 Vector2::new(cx - 30.0, cy - h / 2.0),
                 Vector2::new(cx - w / 2.0, cy + h / 2.0),
                 Vector2::new(cx + w / 2.0, cy + h / 2.0),
+            )
+        } else if self.equilateral {
+            let side = width.max(height).max(40.0);
+            let h = side * 3.0_f64.sqrt() * 0.5;
+            let cx = (min_x + max_x) * 0.5;
+            let bottom_y = min_y + h;
+            (
+                Vector2::new(cx, min_y),
+                Vector2::new(cx - side * 0.5, bottom_y),
+                Vector2::new(cx + side * 0.5, bottom_y),
             )
         } else {
             (
@@ -81,11 +93,16 @@ impl Buildable for MathTriangleBuilder {
         constraints: Constraints,
     ) -> EventResult<BuilderProgress<Self::Emit>> {
         let progress = match event {
-            PenEvent::Down { element, .. } => {
-                self.current = constraints.constrain(element.pos - self.start) + self.start;
+            PenEvent::Down { element, .. } | PenEvent::Proximity { element, .. } => {
+                self.equilateral = constraints.enabled;
+                self.current = element.pos;
                 BuilderProgress::InProgress
             }
-            PenEvent::Up { .. } => {
+            PenEvent::Up { element, .. } => {
+                self.equilateral = constraints.enabled;
+                if (element.pos - self.start).length() >= 1.0 {
+                    self.current = element.pos;
+                }
                 BuilderProgress::Finished(vec![Shape::MathFigure(self.build_math_figure())])
             }
             PenEvent::KeyPressed { keyboard_key, .. } => match keyboard_key {
@@ -93,7 +110,10 @@ impl Buildable for MathTriangleBuilder {
                 KeyboardKey::CarriageReturn | KeyboardKey::Linefeed => {
                     BuilderProgress::Finished(vec![Shape::MathFigure(self.build_math_figure())])
                 }
-                _ => BuilderProgress::InProgress,
+                _ => {
+                    self.equilateral = constraints.enabled;
+                    BuilderProgress::InProgress
+                }
             },
             PenEvent::Cancel => BuilderProgress::Finished(vec![]),
             _ => BuilderProgress::InProgress,

@@ -511,11 +511,116 @@ impl MathFigure {
 
         let mut new_points = Vec::new();
         for x in hits {
-            if self.find_point_near(x, 0.5).is_none() {
-                new_points.push(self.add_point(x, None));
-            }
+            let pt_id = match self.find_point_near(x, 0.5) {
+                Some(id) => id,
+                None => {
+                    let id = self.add_point(x, None);
+                    new_points.push(id);
+                    id
+                }
+            };
+            self.split_segments_at_point(pt_id, 1.5);
         }
         new_points
+    }
+
+    /// Split any line segment `p1 -> p2` that passes through `pt_id` (within `tolerance` pixels
+    /// and strictly between `p1` and `p2`) into two segments `p1 -> pt_id` and `pt_id -> p2`.
+    /// This allows sub-segments and intersection regions to be selected and adjusted independently,
+    /// and ensures dragging an intersection point moves all connected segments together.
+    pub fn split_segments_at_point(&mut self, pt_id: PointId, tolerance: f64) {
+        let pt_pos = match self.points.get(&pt_id) {
+            Some(pt) => pt.pos,
+            None => return,
+        };
+        let tol_sq = tolerance * tolerance;
+
+        let to_split: Vec<(LineId, PointId, PointId, LineStyle, LineType, bool)> = self
+            .lines
+            .iter()
+            .filter_map(|(&line_id, line)| {
+                if line.p1 == pt_id || line.p2 == pt_id {
+                    return None;
+                }
+                let p1 = self.points.get(&line.p1)?.pos;
+                let p2 = self.points.get(&line.p2)?.pos;
+                let ab = p2 - p1;
+                let len_sq = ab.length_squared();
+                if len_sq < 4.0 {
+                    return None;
+                }
+                let t = (pt_pos - p1).dot(ab) / len_sq;
+                if !(0.02..=0.98).contains(&t) {
+                    return None;
+                }
+                let proj = p1 + ab * t;
+                if (pt_pos - proj).length_squared() <= tol_sq
+                    && (pt_pos - p1).length_squared() > tol_sq
+                    && (pt_pos - p2).length_squared() > tol_sq
+                {
+                    Some((
+                        line_id,
+                        line.p1,
+                        line.p2,
+                        line.style,
+                        line.line_type,
+                        line.visible,
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (line_id, p1, p2, style, line_type, visible) in to_split {
+            self.lines.remove(&line_id);
+            let has_seg = |fig: &Self, a: PointId, b: PointId| {
+                fig.lines
+                    .values()
+                    .any(|l| (l.p1 == a && l.p2 == b) || (l.p1 == b && l.p2 == a))
+            };
+            if !has_seg(self, p1, pt_id) {
+                let id1 = LineId(self.next_line_id);
+                self.next_line_id += 1;
+                self.lines.insert(
+                    id1,
+                    GeomLine {
+                        id: id1,
+                        p1,
+                        p2: pt_id,
+                        line_type,
+                        style,
+                        tick_marks: 0,
+                        visible,
+                    },
+                );
+            }
+            if !has_seg(self, pt_id, p2) {
+                let id2 = LineId(self.next_line_id);
+                self.next_line_id += 1;
+                self.lines.insert(
+                    id2,
+                    GeomLine {
+                        id: id2,
+                        p1: pt_id,
+                        p2,
+                        line_type,
+                        style,
+                        tick_marks: 0,
+                        visible,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Split all segments in the figure at any interior point that lies on them.
+    pub fn split_all_segments_at_points(&mut self, tolerance: f64) {
+        let mut pt_ids: Vec<PointId> = self.points.keys().copied().collect();
+        pt_ids.sort_unstable();
+        for pt_id in pt_ids {
+            self.split_segments_at_point(pt_id, tolerance);
+        }
     }
 
     /// Automatically compute all intersections (line-line, line-circle, circle-circle)
@@ -604,6 +709,9 @@ impl MathFigure {
             }
         }
 
+        for &pt_id in &new_points {
+            self.split_segments_at_point(pt_id, 1.5);
+        }
         new_points
     }
 

@@ -223,16 +223,13 @@ pub(crate) fn handle_pointer_controller_event(
                         {
                             appwindow.handle_widget_flags(flags, &canvas);
                             appwindow.overlays().dispatch_toast_text(
-                                &format!(
-                                    "🎯 Đã chấm tâm O tại ({:.0}, {:.0})! AI đã sẵn sàng.",
-                                    pos.x, pos.y
-                                ),
+                                &format!("Đã chấm tâm O tại ({:.0}, {:.0}).", pos.x, pos.y),
                                 None,
                             );
                             let aimenu = appwindow.main_header().aimenu();
                             aimenu.update_center_status();
                             aimenu.append_ai_message(&format!(
-                                "🎯 <b>[Đã Chấm Tâm O]</b> tại toạ độ ({:.0}, {:.0})!\nBây giờ AI sẽ tự động dựng hình chính xác quanh điểm tâm này khi bạn ra lệnh (ví dụ: <i>'vẽ đường tròn bán kính 80'</i>, <i>'vẽ tam giác'</i>, <i>'vẽ hình vuông'</i>)!",
+                                "<b>Đã chấm tâm O</b> tại toạ độ ({:.0}, {:.0}).",
                                 pos.x, pos.y
                             ));
                             aimenu.open_menu();
@@ -276,6 +273,13 @@ pub(crate) fn handle_pointer_controller_event(
                     );
                     widget_flags |= wf;
                     propagation = ep.into_glib();
+
+                    if let Some(appwindow) = canvas
+                        .root()
+                        .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
+                    {
+                        appwindow.main_header().aimenu().update_center_status();
+                    }
                 }
                 PenState::Proximity => {
                     canvas.enable_drawing_cursor(false);
@@ -313,6 +317,13 @@ pub(crate) fn handle_pointer_controller_event(
                     );
                     widget_flags |= wf;
                     propagation = ep.into_glib();
+
+                    if let Some(appwindow) = canvas
+                        .root()
+                        .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
+                    {
+                        appwindow.main_header().aimenu().update_center_status();
+                    }
                 }
             }
         }
@@ -357,7 +368,13 @@ pub(crate) fn handle_key_controller_key_pressed(
     }
 
     let keyboard_key = retrieve_keyboard_key(gdk_key);
-    let modifier_keys = retrieve_modifier_keys(gdk_modifiers);
+    let mut modifier_keys = retrieve_modifier_keys(gdk_modifiers);
+    if matches!(gdk_key, gdk::Key::Shift_L | gdk::Key::Shift_R) {
+        modifier_keys.insert(ModifierKey::KeyboardShift);
+    }
+    if matches!(gdk_key, gdk::Key::Control_L | gdk::Key::Control_R) {
+        modifier_keys.insert(ModifierKey::KeyboardCtrl);
+    }
     let shortcut_key = retrieve_keyboard_shortcut_key(gdk_key, gdk_modifiers);
 
     let (propagation, widget_flags) = if let Some(shortcut_key) = shortcut_key {

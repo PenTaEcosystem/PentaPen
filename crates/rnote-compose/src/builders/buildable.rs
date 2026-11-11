@@ -46,4 +46,9 @@ pub trait Buildable: std::fmt::Debug {
 
     /// Draw with a style.
     fn draw_styled(&self, cx: &mut piet_cairo::CairoRenderContext, style: &Style, zoom: f64);
+
+    /// Active line segment currently being drawn, if any (for live intersection preview).
+    fn active_segment(&self) -> Option<(p2d::math::Vector2, p2d::math::Vector2)> {
+        None
+    }
 }

@@ -46,21 +46,36 @@ impl MathCircleBuilder {
         }
     }
 
+    fn constrain_boundary(start: Vector2, pos: Vector2, snap_angle: bool) -> Vector2 {
+        let diff = pos - start;
+        let r = diff.length();
+        if !snap_angle || r < 1e-6 {
+            return pos;
+        }
+        let step = std::f64::consts::FRAC_PI_4;
+        let angle = (diff.y.atan2(diff.x) / step).round() * step;
+        start + Vector2::new(r * angle.cos(), r * angle.sin())
+    }
+
     fn build_math_figure(&self) -> MathFigure {
-        let radius = (self.current - self.start).length();
-        let (center_pos, final_radius) = if radius < 15.0 {
+        let diff = self.current - self.start;
+        let radius = diff.length();
+        let (center_pos, final_radius, dir) = if radius < 15.0 {
             // Default circle if simply clicked
-            (self.start, 80.0)
+            (self.start, 80.0, Vector2::new(1.0, 0.0))
         } else {
-            (self.start, radius)
+            (self.start, radius, diff / radius)
         };
 
         let mut fig = MathFigure::new();
-        fig.build_circle(
-            center_pos,
-            final_radius,
-            Some(&self.center_label),
-            Some(&self.boundary_label),
+        let center_id = fig.add_point(center_pos, Some(self.center_label.clone()));
+        let boundary_pos = center_pos + dir * final_radius;
+        let boundary_id = fig.add_point(boundary_pos, Some(self.boundary_label.clone()));
+        fig.add_circle_through(center_id, boundary_id);
+        fig.add_auxiliary_line(
+            center_id,
+            boundary_id,
+            crate::geometry::entity::LineType::Segment,
         );
         fig
     }
@@ -76,11 +91,16 @@ impl Buildable for MathCircleBuilder {
         constraints: Constraints,
     ) -> EventResult<BuilderProgress<Self::Emit>> {
         let progress = match event {
-            PenEvent::Down { element, .. } => {
-                self.current = constraints.constrain(element.pos - self.start) + self.start;
+            PenEvent::Down { element, .. } | PenEvent::Proximity { element, .. } => {
+                self.current =
+                    Self::constrain_boundary(self.start, element.pos, constraints.enabled);
                 BuilderProgress::InProgress
             }
-            PenEvent::Up { .. } => {
+            PenEvent::Up { element, .. } => {
+                if (element.pos - self.start).length() >= 1.0 {
+                    self.current =
+                        Self::constrain_boundary(self.start, element.pos, constraints.enabled);
+                }
                 BuilderProgress::Finished(vec![Shape::MathFigure(self.build_math_figure())])
             }
             PenEvent::KeyPressed { keyboard_key, .. } => match keyboard_key {
@@ -88,7 +108,11 @@ impl Buildable for MathCircleBuilder {
                 KeyboardKey::CarriageReturn | KeyboardKey::Linefeed => {
                     BuilderProgress::Finished(vec![Shape::MathFigure(self.build_math_figure())])
                 }
-                _ => BuilderProgress::InProgress,
+                _ => {
+                    self.current =
+                        Self::constrain_boundary(self.start, self.current, constraints.enabled);
+                    BuilderProgress::InProgress
+                }
             },
             PenEvent::Cancel => BuilderProgress::Finished(vec![]),
             _ => BuilderProgress::InProgress,

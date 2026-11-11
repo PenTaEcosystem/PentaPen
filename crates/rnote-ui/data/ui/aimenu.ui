@@ -6,13 +6,13 @@
     </property>
     <child>
       <object class="GtkMenuButton" id="menubutton">
-        <property name="icon_name">ai-sparkle-symbolic</property>
+        <property name="label">AI</property>
         <property name="tooltip_text" translatable="yes">Trợ lý hình học AI (phím A)</property>
       </object>
     </child>
     <object class="GtkPopover" id="popover">
-      <property name="width-request">420</property>
-      <property name="height-request">540</property>
+      <property name="width-request">400</property>
+      <property name="height-request">480</property>
       <child>
         <object class="GtkBox">
           <property name="orientation">vertical</property>
@@ -21,40 +21,30 @@
           <property name="margin-bottom">10</property>
           <property name="margin-start">10</property>
           <property name="margin-end">10</property>
-          
-          <!-- Header -->
+
+          <!-- Header (clean text, no icons) -->
           <child>
             <object class="GtkBox">
-              <property name="spacing">8</property>
-              <property name="valign">center</property>
+              <property name="orientation">vertical</property>
+              <property name="spacing">2</property>
               <child>
-                <object class="GtkImage">
-                  <property name="icon-name">ai-sparkle-symbolic</property>
-                  <property name="pixel-size">22</property>
+                <object class="GtkLabel">
+                  <property name="label" translatable="yes">Trợ lý hình học AI</property>
+                  <property name="halign">start</property>
+                  <attributes>
+                    <attribute name="weight" value="bold" />
+                  </attributes>
                 </object>
               </child>
               <child>
-                <object class="GtkBox">
-                  <property name="orientation">vertical</property>
-                  <child>
-                    <object class="GtkLabel">
-                      <property name="label" translatable="yes">AI Geometry Assistant</property>
-                      <property name="halign">start</property>
-                      <attributes>
-                        <attribute name="weight" value="bold" />
-                      </attributes>
-                    </object>
-                  </child>
-                  <child>
-                    <object class="GtkLabel">
-                      <property name="label" translatable="yes">Mô tả hình cần vẽ, AI dựng chính xác lên bảng</property>
-                      <property name="halign">start</property>
-                      <style>
-                        <class name="dim-label" />
-                        <class name="caption" />
-                      </style>
-                    </object>
-                  </child>
+                <object class="GtkLabel">
+                  <property name="label" translatable="yes">Nhấn vào hình trên bảng để sửa trực tiếp hoặc nhập lệnh dựng hình</property>
+                  <property name="halign">start</property>
+                  <property name="wrap">true</property>
+                  <style>
+                    <class name="dim-label" />
+                    <class name="caption" />
+                  </style>
                 </object>
               </child>
             </object>
@@ -63,7 +53,7 @@
           <!-- API settings: any OpenAI-compatible endpoint -->
           <child>
             <object class="GtkExpander">
-              <property name="label">⚙ Cấu hình API</property>
+              <property name="label">Cấu hình API</property>
               <child>
                 <object class="GtkGrid">
                   <property name="row-spacing">6</property>
@@ -105,7 +95,7 @@
                   </child>
                   <child>
                     <object class="GtkPasswordEntry" id="api_key_entry">
-                      <property name="show-peek-icon">true</property>
+                      <property name="show-peek-icon">false</property>
                       <layout><property name="column">1</property><property name="row">2</property></layout>
                     </object>
                   </child>
@@ -124,7 +114,7 @@
             </object>
           </child>
 
-          <!-- Center Management Card: Chấm tâm & Dựng hình theo tâm -->
+          <!-- Selected Shape & Center Status Card (text-only, no icon clutter) -->
           <child>
             <object class="GtkBox">
               <property name="orientation">vertical</property>
@@ -144,16 +134,18 @@
                     <object class="GtkLabel" id="center_status_label">
                       <property name="hexpand">true</property>
                       <property name="xalign">0</property>
-                      <property name="label">⚪ Chưa chọn tâm (Bấm 'Chấm tâm' để chọn)</property>
+                      <property name="wrap">true</property>
+                      <property name="label">Chưa chọn hình hoặc tâm (Nhấn vào hình trên bảng để sửa trực tiếp)</property>
                       <property name="use-markup">true</property>
                     </object>
                   </child>
                   <child>
                     <object class="GtkButton" id="clear_center_button">
-                      <property name="label">✖️</property>
-                      <property name="tooltip-text" translatable="yes">Bỏ chọn tâm</property>
+                      <property name="label">Bỏ chọn</property>
+                      <property name="tooltip-text" translatable="yes">Bỏ chọn hình hoặc tâm hiện tại</property>
                       <style>
                         <class name="flat" />
+                        <class name="caption" />
                       </style>
                     </object>
                   </child>
@@ -164,110 +156,28 @@
                   <property name="spacing">6</property>
                   <property name="margin-start">8</property>
                   <property name="margin-end">8</property>
-                  <property name="margin-bottom">4</property>
+                  <property name="margin-bottom">6</property>
                   <child>
                     <object class="GtkButton" id="pick_center_button">
                       <property name="hexpand">true</property>
-                      <property name="label">🎯 Chấm tâm trên bảng</property>
+                      <property name="label">Chấm tâm trên bảng</property>
                       <property name="tooltip-text" translatable="yes">Nhấp trực tiếp lên bảng vẽ để chấm điểm tâm</property>
                       <style>
-                        <class name="suggested-action" />
+                        <class name="flat" />
+                        <class name="caption" />
                       </style>
                     </object>
                   </child>
                   <child>
                     <object class="GtkButton" id="center_current_view_button">
-                      <property name="label">📍 Lấy giữa màn hình</property>
+                      <property name="label">Lấy giữa màn hình</property>
                       <property name="tooltip-text" translatable="yes">Lấy điểm giữa khung nhìn hiện tại làm tâm</property>
                       <style>
                         <class name="flat" />
-                      </style>
-                    </object>
-                  </child>
-                </object>
-              </child>
-              <!-- Hàng nút vẽ nhanh theo tâm đã chấm -->
-              <child>
-                <object class="GtkBox">
-                  <property name="spacing">4</property>
-                  <property name="homogeneous">true</property>
-                  <property name="margin-start">8</property>
-                  <property name="margin-end">8</property>
-                  <property name="margin-bottom">6</property>
-                  <child>
-                    <object class="GtkButton" id="draw_circle_from_center">
-                      <property name="label">⭕ Đường tròn</property>
-                      <property name="tooltip-text" translatable="yes">Vẽ đường tròn quanh điểm tâm đã chấm</property>
-                      <style>
-                        <class name="flat" />
                         <class name="caption" />
                       </style>
                     </object>
                   </child>
-                  <child>
-                    <object class="GtkButton" id="draw_triangle_from_center">
-                      <property name="label">📐 Tam giác đều</property>
-                      <property name="tooltip-text" translatable="yes">Vẽ tam giác đều nhận tâm đã chấm làm trọng tâm</property>
-                      <style>
-                        <class name="flat" />
-                        <class name="caption" />
-                      </style>
-                    </object>
-                  </child>
-                  <child>
-                    <object class="GtkButton" id="draw_square_from_center">
-                      <property name="label">🟩 Hình vuông</property>
-                      <property name="tooltip-text" translatable="yes">Vẽ hình vuông nhận tâm đã chấm làm tâm đối xứng</property>
-                      <style>
-                        <class name="flat" />
-                        <class name="caption" />
-                      </style>
-                    </object>
-                  </child>
-                </object>
-              </child>
-            </object>
-          </child>
-
-          <!-- Quick Action Buttons -->
-          <child>
-            <object class="GtkBox">
-              <property name="spacing">4</property>
-              <property name="homogeneous">true</property>
-              <child>
-                <object class="GtkButton" id="quick_triangle">
-                  <property name="label">📐 Tam giác</property>
-                  <style>
-                    <class name="flat" />
-                    <class name="caption" />
-                  </style>
-                </object>
-              </child>
-              <child>
-                <object class="GtkButton" id="quick_circle">
-                  <property name="label">🔴 Đường tròn</property>
-                  <style>
-                    <class name="flat" />
-                    <class name="caption" />
-                  </style>
-                </object>
-              </child>
-              <child>
-                <object class="GtkButton" id="quick_tangent">
-                  <property name="label">📏 Tiếp tuyến</property>
-                  <style>
-                    <class name="flat" />
-                    <class name="caption" />
-                  </style>
-                </object>
-              </child>
-              <child>
-                <object class="GtkButton" id="quick_centers">
-                  <property name="label">🎯 4 Tâm</property>
-                  <style>
-                    <class name="flat" />
-                    <class name="caption" />
-                  </style>
                 </object>
               </child>
             </object>
@@ -277,7 +187,7 @@
           <child>
             <object class="GtkScrolledWindow" id="chat_scroller">
               <property name="vexpand">true</property>
-              <property name="min-content-height">200</property>
+              <property name="min-content-height">220</property>
               <property name="hscrollbar-policy">never</property>
               <style>
                 <class name="card" />
@@ -302,13 +212,13 @@
               <child>
                 <object class="GtkEntry" id="prompt_entry">
                   <property name="hexpand">true</property>
-                  <property name="placeholder-text" translatable="yes">Vd: vẽ tam giác ABC vuông tại A, kẻ đường cao AH</property>
+                  <property name="placeholder-text" translatable="yes">Nhập lệnh vẽ hoặc sửa hình đang chọn (vd: kẻ đường cao AH, đổi nét đứt...)</property>
                 </object>
               </child>
               <child>
                 <object class="GtkButton" id="send_button">
-                  <property name="icon-name">dir-right-symbolic</property>
-                  <property name="tooltip-text" translatable="yes">Gửi lệnh vẽ cho AI</property>
+                  <property name="label">Gửi</property>
+                  <property name="tooltip-text" translatable="yes">Gửi lệnh cho AI</property>
                   <style>
                     <class name="suggested-action" />
                   </style>

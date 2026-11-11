@@ -39,14 +39,27 @@ impl Buildable for RectangleBuilder {
         &mut self,
         event: PenEvent,
         _now: Instant,
-        constraints: Constraints,
+        mut constraints: Constraints,
     ) -> EventResult<BuilderProgress<Self::Emit>> {
+        constraints
+            .ratios
+            .remove(&crate::constraints::ConstraintRatio::Horizontal);
+        constraints
+            .ratios
+            .remove(&crate::constraints::ConstraintRatio::Vertical);
+        constraints
+            .ratios
+            .insert(crate::constraints::ConstraintRatio::OneToOne);
+
         let progress = match event {
-            PenEvent::Down { element, .. } => {
+            PenEvent::Down { element, .. } | PenEvent::Proximity { element, .. } => {
                 self.current = constraints.constrain(element.pos - self.start) + self.start;
                 BuilderProgress::InProgress
             }
-            PenEvent::Up { .. } => {
+            PenEvent::Up { element, .. } => {
+                if (element.pos - self.start).length() >= 1.0 {
+                    self.current = constraints.constrain(element.pos - self.start) + self.start;
+                }
                 BuilderProgress::Finished(vec![Shape::Rectangle(self.state_as_rect())])
             }
             _ => BuilderProgress::InProgress,

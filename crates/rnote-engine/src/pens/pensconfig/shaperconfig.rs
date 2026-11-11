@@ -59,7 +59,7 @@ pub struct ShaperConfig {
     pub math_center_label: String,
     #[serde(default = "default_true", rename = "math_auto_intersections")]
     pub math_auto_intersections: bool,
-    #[serde(default = "default_true", rename = "math_show_centers")]
+    #[serde(default = "default_false", rename = "math_show_centers")]
     pub math_show_centers: bool,
 }
 
@@ -71,12 +71,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
 impl Default for ShaperConfig {
     fn default() -> Self {
         let mut constraints = Constraints::default();
         constraints.ratios.insert(ConstraintRatio::OneToOne);
-        constraints.ratios.insert(ConstraintRatio::Horizontal);
-        constraints.ratios.insert(ConstraintRatio::Vertical);
 
         Self {
             builder_type: ShapeBuilderType::default(),
@@ -88,7 +90,7 @@ impl Default for ShaperConfig {
             constraints,
             math_center_label: String::from("O"),
             math_auto_intersections: true,
-            math_show_centers: true,
+            math_show_centers: false,
         }
     }
 }

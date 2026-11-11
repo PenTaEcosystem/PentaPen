@@ -424,7 +424,10 @@ impl RnAppWindow {
             move |_, _| {
                 if let Some(canvas) = appwindow.active_tab_canvas() {
                     canvas.set_picking_center(true);
-                    appwindow.overlays().dispatch_toast_text("🎯 Hãy nhấp chuột hoặc chạm bút lên bảng vẽ để đặt điểm tâm... (Esc để huỷ)", None);
+                    appwindow.overlays().dispatch_toast_text(
+                        "Hãy nhấp chuột hoặc chạm bút lên bảng vẽ để đặt điểm tâm (Esc để huỷ)",
+                        None,
+                    );
                 }
             }
         ));

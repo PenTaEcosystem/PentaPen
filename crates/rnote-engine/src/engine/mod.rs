@@ -1093,4 +1093,251 @@ impl Engine {
         points.dedup_by(|a, b| a.0 == b.0);
         points
     }
+
+    /// Returns the stroke key of the shape currently clicked/selected by the user
+    /// (either in Shaper manipulation mode or in Selector mode).
+    pub fn selected_shape_key(&self) -> Option<StrokeKey> {
+        if let Some(key) = self.penholder.selected_shaper_stroke()
+            && self.store.get_stroke_ref(key).is_some()
+        {
+            return Some(key);
+        }
+        self.store
+            .selection_keys_as_rendered()
+            .into_iter()
+            .find(|&k| {
+                matches!(
+                    self.store.get_stroke_ref(k),
+                    Some(crate::strokes::Stroke::ShapeStroke(_))
+                )
+            })
+    }
+
+    /// Clear any active shape selection in Shaper or Selector.
+    pub fn clear_shape_selection(&mut self) -> WidgetFlags {
+        let mut flags = WidgetFlags::default();
+        if self.penholder.clear_shaper_selection() {
+            flags.redraw = true;
+        }
+        let sel = self.store.selection_keys_unordered();
+        if !sel.is_empty() {
+            self.store.set_selected_keys(&sel, false);
+            flags.redraw = true;
+            flags.store_modified = true;
+        }
+        flags
+    }
+
+    /// Short human-readable summary of the currently selected shape for the AI menu UI.
+    pub fn selected_shape_summary(&self) -> Option<(StrokeKey, String)> {
+        let key = self.selected_shape_key()?;
+        let crate::strokes::Stroke::ShapeStroke(ss) = self.store.get_stroke_ref(key)? else {
+            return None;
+        };
+        let summary = match &ss.shape {
+            rnote_compose::Shape::MathFigure(fig) => {
+                let mut labels: Vec<String> = fig
+                    .points
+                    .values()
+                    .filter_map(|p| p.label.clone())
+                    .collect();
+                labels.sort();
+                if !fig.circles.is_empty() {
+                    if labels.is_empty() {
+                        format!("Đường tròn ({} điểm)", fig.points.len())
+                    } else {
+                        format!("Đường tròn ({})", labels.join(", "))
+                    }
+                } else if fig.lines.len() == 3 && fig.points.len() >= 3 {
+                    format!("Tam giác {}", labels.join(""))
+                } else if fig.lines.len() == 4 && fig.points.len() >= 4 {
+                    format!("Tứ giác {}", labels.join(""))
+                } else if !labels.is_empty() {
+                    format!("Hình ({})", labels.join(", "))
+                } else {
+                    format!("Hình ({} điểm, {} đoạn)", fig.points.len(), fig.lines.len())
+                }
+            }
+            rnote_compose::Shape::Ellipse(e) => {
+                if (e.radii.x - e.radii.y).abs() < 1.0 {
+                    format!("Hình tròn (R={:.0})", e.radii.x)
+                } else {
+                    format!("Hình elip ({:.0}x{:.0})", e.radii.x, e.radii.y)
+                }
+            }
+            rnote_compose::Shape::Rectangle(r) => {
+                format!(
+                    "Hình chữ nhật ({:.0}x{:.0})",
+                    r.cuboid.half_extents.x * 2.0,
+                    r.cuboid.half_extents.y * 2.0
+                )
+            }
+            rnote_compose::Shape::Line(l) => {
+                format!("Đoạn thẳng (dài {:.0})", (l.end - l.start).length())
+            }
+            _ => String::from("Hình đang chọn"),
+        };
+        Some((key, summary))
+    }
+
+    /// Convert a selected `ShapeStroke` into a `MathFigure` (preserving existing `MathFigure` or
+    /// converting primitive `Ellipse`, `Rectangle`, `Line`, `Polygon` into an editable `MathFigure`).
+    pub fn stroke_as_math_figure(&self, key: StrokeKey) -> Option<rnote_compose::MathFigure> {
+        let crate::strokes::Stroke::ShapeStroke(ss) = self.store.get_stroke_ref(key)? else {
+            return None;
+        };
+        let fig = match &ss.shape {
+            rnote_compose::Shape::MathFigure(f) => f.clone(),
+            rnote_compose::Shape::Ellipse(e) => {
+                let mut f = rnote_compose::MathFigure::new();
+                let r = (e.radii.x + e.radii.y) * 0.5;
+                f.build_circle(e.affine.translation, r, Some("O"), Some("M"));
+                f
+            }
+            rnote_compose::Shape::Rectangle(r) => {
+                let mut f = rnote_compose::MathFigure::new();
+                let center = r.affine.translation;
+                let he = r.cuboid.half_extents;
+                let top_left = center - he;
+                f.build_rectangle(top_left, he.x * 2.0, he.y * 2.0, Some(["A", "B", "C", "D"]));
+                f
+            }
+            rnote_compose::Shape::Line(l) => {
+                let mut f = rnote_compose::MathFigure::new();
+                f.build_line(l.start, l.end, Some("A"), Some("B"));
+                f
+            }
+            _ => return None,
+        };
+        Some(fig)
+    }
+
+    /// Detailed geometric description and reference origin of the selected shape for the AI prompt.
+    pub fn selected_shape_ai_context(&self, key: StrokeKey) -> Option<(Vector2, String)> {
+        let fig = self.stroke_as_math_figure(key)?;
+        let origin = if let Some(circ) = fig.circles.values().next()
+            && let Some(c_pt) = fig.points.get(&circ.center)
+        {
+            c_pt.pos
+        } else if !fig.points.is_empty() {
+            let sum: Vector2 = fig.points.values().map(|p| p.pos).sum();
+            sum / (fig.points.len() as f64)
+        } else {
+            self.camera.viewport().center()
+        };
+
+        let mut pts_desc = Vec::new();
+        let mut sorted_pts: Vec<_> = fig.points.values().collect();
+        sorted_pts.sort_by_key(|p| p.id);
+        for p in sorted_pts {
+            let rel = p.pos - origin;
+            let name = p.label.as_deref().unwrap_or("(giao điểm)");
+            pts_desc.push(format!("{name}({:.0},{:.0})", rel.x, rel.y));
+        }
+
+        let mut lines_desc = Vec::new();
+        let mut sorted_lines: Vec<_> = fig.lines.values().collect();
+        sorted_lines.sort_by_key(|l| l.id);
+        for l in sorted_lines {
+            let n1 = fig
+                .points
+                .get(&l.p1)
+                .and_then(|p| p.label.as_deref())
+                .unwrap_or("?");
+            let n2 = fig
+                .points
+                .get(&l.p2)
+                .and_then(|p| p.label.as_deref())
+                .unwrap_or("?");
+            let st = match l.style {
+                rnote_compose::geometry::LineStyle::Solid => "solid",
+                rnote_compose::geometry::LineStyle::Dashed => "dashed",
+                rnote_compose::geometry::LineStyle::Dotted => "dotted",
+            };
+            lines_desc.push(format!("{n1}-{n2}({st})"));
+        }
+
+        let mut circ_desc = Vec::new();
+        for c in fig.circles.values() {
+            let cname = fig
+                .points
+                .get(&c.center)
+                .and_then(|p| p.label.as_deref())
+                .unwrap_or("O");
+            circ_desc.push(format!("tâm {cname} bán kính {:.0}", c.radius));
+        }
+
+        let desc = format!(
+            "Điểm (tọa độ tương đối so với gốc {:.0},{:.0}): [{}]; Đoạn thẳng: [{}]; Đường tròn: [{}]",
+            origin.x,
+            origin.y,
+            pts_desc.join(", "),
+            lines_desc.join(", "),
+            circ_desc.join(", ")
+        );
+        Some((origin, desc))
+    }
+
+    /// Replace the shape of an existing stroke `key` in-place with the updated `MathFigure`,
+    /// recomputing intersections and regenerating rendering so the user's selected shape is modified directly.
+    pub fn update_shape_with_figure(
+        &mut self,
+        key: StrokeKey,
+        mut fig: rnote_compose::MathFigure,
+    ) -> WidgetFlags {
+        if self
+            .config
+            .read()
+            .pens_config
+            .shaper_config
+            .math_auto_intersections
+        {
+            fig.auto_detect_intersections();
+            let mut segments = Vec::new();
+            let mut circles = Vec::new();
+            for other_key in self.store.stroke_keys_unordered() {
+                if other_key == key {
+                    continue;
+                }
+                let Some(crate::strokes::Stroke::ShapeStroke(ss)) =
+                    self.store.get_stroke_ref(other_key)
+                else {
+                    continue;
+                };
+                if let rnote_compose::Shape::MathFigure(other_fig) = &ss.shape {
+                    segments.extend(other_fig.lines.values().filter_map(|l| {
+                        Some((
+                            other_fig.points.get(&l.p1)?.pos,
+                            other_fig.points.get(&l.p2)?.pos,
+                        ))
+                    }));
+                    circles.extend(
+                        other_fig
+                            .circles
+                            .values()
+                            .filter_map(|c| Some((other_fig.points.get(&c.center)?.pos, c.radius))),
+                    );
+                }
+            }
+            fig.add_intersections_with(&segments, &circles);
+        }
+
+        if let Some(crate::strokes::Stroke::ShapeStroke(ss)) = self.store.get_stroke_mut(key) {
+            ss.shape = rnote_compose::Shape::MathFigure(fig);
+        } else {
+            return self.insert_shape(rnote_compose::Shape::MathFigure(fig));
+        }
+
+        self.store.update_geometry_for_strokes(&[key]);
+        self.store.regenerate_rendering_for_stroke(
+            key,
+            self.camera.viewport(),
+            self.camera.image_scale(),
+        );
+        let mut widget_flags = self.record(Instant::now());
+        widget_flags |= self.document.resize_autoexpand(&self.store, &self.camera);
+        widget_flags.store_modified = true;
+        widget_flags.redraw = true;
+        widget_flags
+    }
 }

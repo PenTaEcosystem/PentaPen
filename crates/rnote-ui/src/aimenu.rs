@@ -47,14 +47,19 @@ impl AiConfig {
     }
 }
 
-const SYSTEM_PROMPT: &str = r#"You draw plane-geometry figures on the canvas of the drawing app PentaPen.
+const SYSTEM_PROMPT: &str = r#"You draw and edit plane-geometry figures on the canvas of the drawing app PentaPen.
 Reply with ONLY one JSON object (no markdown, no prose outside it):
 {"explanation": "<short answer in Vietnamese>",
+ "replace": false,
  "points": [{"name": "A", "x": 0.0, "y": 0.0}],
  "lines": [{"p1": "A", "p2": "B", "style": "solid"}],
  "circles": [{"center": "O", "radius": 80.0}, {"center": "O", "through": "A"}],
  "right_angles": [{"vertex": "H", "arm1": "A", "arm2": "B"}],
- "constructions": [{"op": "altitude", "of": ["A", "B", "C"], "name": "H"}]}
+ "constructions": [{"op": "altitude", "of": ["A", "B", "C"], "name": "H"}],
+ "rename": [{"from": "A", "to": "M"}],
+ "remove_points": ["D"],
+ "remove_lines": [{"p1": "A", "p2": "B"}],
+ "remove_circles": ["O"]}
 Rules:
 - Coordinates are canvas pixels, x to the right, y DOWNWARDS. Place the figure around the given anchor, typical size 150-300 px.
 - Give coordinates only for free points (e.g. the vertices of a triangle). Every derived point must come from a construction so it is exact:
@@ -63,7 +68,9 @@ Rules:
   centroid, orthocenter, circumcenter, incenter of [A,B,C]; circumcircle, incircle of [A,B,C] (center named `name`);
   tangents of [P,O] with "names": ["B","C"] (tangents from P to the circle centered at O, put that circle in "circles").
 - Constructions run in order and may use points created by earlier ones. Draw sides yourself with "lines".
-- Points listed as existing are already on the canvas: refer to them by name instead of redefining them.
+- When "Selected shape" is provided in the user prompt, your edits apply DIRECTLY to that selected shape in-place:
+  - Keep `"replace": false` when adding constructions (altitude, median, bisector, circumcircle, incircle, tangents, etc.), adding lines/circles/points, restyling lines/circles, moving specific points (by listing them in `"points"` with new canvas coordinates), resizing an existing circle (by listing its `"center"` and new `"radius"` in `"circles"`), renaming points (`"rename"`), or removing elements (`"remove_points"`, `"remove_lines"`, `"remove_circles"`).
+  - Set `"replace": true` ONLY when the user asks to replace or redraw the entire selected shape into a completely different shape (e.g. "đổi thành hình vuông", "vẽ lại thành tam giác đều").
 - Respect requested lengths and angles. If the user gives lengths in cm, 1 cm = 40 px.
 - "style" (lines and circles) is "solid", "dashed" or "dotted"; use dashed for auxiliary lines.
 - To change an existing line (e.g. "make AB dashed"), list it in "lines" with the new style: lines between existing points are restyled, not redrawn.
@@ -73,11 +80,28 @@ Rules:
 #[serde(default)]
 struct GeometryJson {
     explanation: Option<String>,
+    replace: bool,
     points: Vec<JsonPoint>,
     lines: Vec<JsonLine>,
     circles: Vec<JsonCircle>,
     right_angles: Vec<JsonRightAngle>,
     constructions: Vec<JsonConstruction>,
+    rename: Vec<JsonRename>,
+    remove_points: Vec<String>,
+    remove_lines: Vec<JsonLineRef>,
+    remove_circles: Vec<String>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct JsonRename {
+    from: String,
+    to: String,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct JsonLineRef {
+    p1: String,
+    p2: String,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -151,6 +175,19 @@ fn parse_geometry(reply: &str) -> Result<GeometryJson, String> {
 /// Build the figure the model described. Names not defined in the reply are looked up among
 /// `existing` canvas points. Returns the figure and warnings for steps that could not be built.
 fn build_figure(geom: &GeometryJson, existing: &[(String, Vector2)]) -> (MathFigure, Vec<String>) {
+    let mut fig = MathFigure::new();
+    let warnings = apply_geometry_to_figure(&mut fig, geom, existing);
+    (fig, warnings)
+}
+
+/// Apply `GeometryJson` operations directly onto an existing (or new) `MathFigure`.
+/// This allows AI to edit a user's clicked/selected figure in-place (moving points, resizing circles,
+/// adding constructions/lines/circles, changing styles, renaming, or removing elements).
+fn apply_geometry_to_figure(
+    fig: &mut MathFigure,
+    geom: &GeometryJson,
+    existing: &[(String, Vector2)],
+) -> Vec<String> {
     fn key(name: &str) -> String {
         name.trim().to_uppercase()
     }
@@ -163,13 +200,17 @@ fn build_figure(geom: &GeometryJson, existing: &[(String, Vector2)]) -> (MathFig
         if let Some(&id) = ids.get(&key(name)) {
             return Some(id);
         }
+        if let Some(id) = fig.find_point_by_label(name) {
+            ids.insert(key(name), id);
+            return Some(id);
+        }
         let (label, pos) = existing.iter().find(|(l, _)| key(l) == key(name))?;
         let id = fig.add_point(*pos, Some(label.clone()));
         ids.insert(key(name), id);
         Some(id)
     }
 
-    /// Add one circle; false when its points do not exist (yet).
+    /// Add or update one circle; false when its points do not exist (yet).
     fn add_circle(
         fig: &mut MathFigure,
         ids: &mut HashMap<String, PointId>,
@@ -193,12 +234,48 @@ fn build_figure(geom: &GeometryJson, existing: &[(String, Vector2)]) -> (MathFig
         else {
             return false;
         };
-        // Already drawn, e.g. by a circumcircle construction
-        if !fig
+        // If there is already a circle with center `o` in the figure and an explicit radius/style was given,
+        // update it in-place when `c.radius` is specified and only 1 circle is centered at `o`.
+        let existing_at_o: Vec<_> = fig
             .circles
             .values()
-            .any(|x| x.center == o && (x.radius - r).abs() < 0.5)
+            .filter(|x| x.center == o)
+            .map(|x| x.id)
+            .collect();
+        if existing_at_o.len() == 1 && through.is_none() && c.radius.is_some() {
+            let cid = existing_at_o[0];
+            let through_pt = fig.circles.get(&cid).and_then(|circ| circ.through_point);
+            let center_pos = fig.points[&o].pos;
+            if let Some(circ) = fig.circles.get_mut(&cid) {
+                circ.radius = r;
+                if let Some(style) = line_style(c.style.as_deref()) {
+                    circ.style = style;
+                }
+            }
+            if let Some(tp_id) = through_pt
+                && let Some(tp) = fig.points.get_mut(&tp_id)
+            {
+                let dir = (tp.pos - center_pos)
+                    .try_normalize()
+                    .unwrap_or_else(|| Vector2::new(1.0, 0.0));
+                tp.pos = center_pos + dir * r;
+            }
+            return true;
+        }
+
+        // Already drawn, e.g. by a circumcircle construction
+        if let Some(cid) = fig
+            .circles
+            .values()
+            .find(|x| x.center == o && (x.radius - r).abs() < 0.5)
+            .map(|x| x.id)
         {
+            if let Some(style) = line_style(c.style.as_deref())
+                && let Some(circ) = fig.circles.get_mut(&cid)
+            {
+                circ.style = style;
+            }
+        } else {
             let id = match through {
                 Some(t) => fig.add_circle_through(o, t),
                 None => fig.add_circle_radius(o, r),
@@ -210,25 +287,98 @@ fn build_figure(geom: &GeometryJson, existing: &[(String, Vector2)]) -> (MathFig
         true
     }
 
-    let mut fig = MathFigure::new();
+    if geom.replace {
+        *fig = MathFigure::new();
+    }
+
     let mut ids = HashMap::new();
+    for (&id, pt) in &fig.points {
+        if let Some(ref lbl) = pt.label {
+            ids.insert(key(lbl), id);
+        }
+    }
     let mut warnings = Vec::new();
 
+    // 1. Removals
+    for rm_line in &geom.remove_lines {
+        let k1 = key(&rm_line.p1);
+        let k2 = key(&rm_line.p2);
+        if let (Some(&p1), Some(&p2)) = (ids.get(&k1), ids.get(&k2)) {
+            fig.lines
+                .retain(|_, l| !((l.p1 == p1 && l.p2 == p2) || (l.p1 == p2 && l.p2 == p1)));
+        }
+    }
+    for rm_circ in &geom.remove_circles {
+        let kc = key(rm_circ);
+        if let Some(&c_id) = ids.get(&kc) {
+            fig.circles.retain(|_, c| c.center != c_id);
+        }
+    }
+    for rm_pt in &geom.remove_points {
+        let kp = key(rm_pt);
+        if let Some(pid) = ids.remove(&kp) {
+            fig.points.remove(&pid);
+            fig.lines.retain(|_, l| l.p1 != pid && l.p2 != pid);
+            fig.circles
+                .retain(|_, c| c.center != pid && c.through_point != Some(pid));
+        }
+    }
+
+    // 2. Renames
+    for rn in &geom.rename {
+        let kf = key(&rn.from);
+        if let Some(pid) = ids.remove(&kf) {
+            if let Some(pt) = fig.points.get_mut(&pid) {
+                pt.label = Some(rn.to.trim().to_string());
+            }
+            ids.insert(key(&rn.to), pid);
+        }
+    }
+
+    // 3. Points (update existing point position in-place or add new point)
     for p in &geom.points {
-        let id = fig.add_point(Vector2::new(p.x, p.y), Some(p.name.trim().to_string()));
-        ids.insert(key(&p.name), id);
+        let kp = key(&p.name);
+        let new_pos = Vector2::new(p.x, p.y);
+        if let Some(&existing_id) = ids.get(&kp) {
+            if let Some(pt) = fig.points.get_mut(&existing_id) {
+                pt.pos = new_pos;
+            }
+            // Update radii of any circles centered at or passing through this point
+            let updates: Vec<_> = fig
+                .circles
+                .values()
+                .filter_map(|c| {
+                    let tp = c.through_point?;
+                    if c.center == existing_id || tp == existing_id {
+                        let c_pos = fig.points.get(&c.center)?.pos;
+                        let t_pos = fig.points.get(&tp)?.pos;
+                        Some((c.id, (t_pos - c_pos).length()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (cid, new_r) in updates {
+                if let Some(c) = fig.circles.get_mut(&cid) {
+                    c.radius = new_r;
+                }
+            }
+        } else {
+            let id = fig.add_point(new_pos, Some(p.name.trim().to_string()));
+            ids.insert(kp, id);
+        }
     }
     // Circles on known points come before constructions (tangents need their circle);
     // circles on construction points (e.g. a circumcenter) are retried after them.
     let pending_circles: Vec<&JsonCircle> = geom
         .circles
         .iter()
-        .filter(|c| !add_circle(&mut fig, &mut ids, existing, c))
+        .filter(|c| !add_circle(fig, &mut ids, existing, c))
         .collect();
     for c in &geom.constructions {
         let Some(pts) =
             c.of.iter()
-                .map(|n| resolve(&mut fig, &mut ids, existing, n))
+                .map(|n| resolve(fig, &mut ids, existing, n))
                 .collect::<Option<Vec<PointId>>>()
         else {
             warnings.push(format!("{}: thiếu điểm {}", c.op, c.of.join(",")));
@@ -299,39 +449,46 @@ fn build_figure(geom: &GeometryJson, existing: &[(String, Vector2)]) -> (MathFig
         }
     }
     for c in pending_circles {
-        if !add_circle(&mut fig, &mut ids, existing, c) {
+        if !add_circle(fig, &mut ids, existing, c) {
             warnings.push(format!("Đường tròn tâm {}: thiếu dữ liệu", c.center));
         }
     }
     for l in &geom.lines {
         match (
-            resolve(&mut fig, &mut ids, existing, &l.p1),
-            resolve(&mut fig, &mut ids, existing, &l.p2),
+            resolve(fig, &mut ids, existing, &l.p1),
+            resolve(fig, &mut ids, existing, &l.p2),
         ) {
-            // Already drawn, e.g. the altitude AH from a construction
-            (Some(a), Some(b))
-                if fig
+            // Already drawn: update style if requested
+            (Some(a), Some(b)) => {
+                if let Some(existing_line_id) = fig
                     .lines
                     .values()
-                    .any(|x| (x.p1, x.p2) == (a, b) || (x.p1, x.p2) == (b, a)) => {}
-            (Some(a), Some(b)) => {
-                let id = fig.add_segment(a, b);
-                if let Some(style) = line_style(l.style.as_deref()) {
-                    fig.lines.get_mut(&id).unwrap().style = style;
+                    .find(|x| (x.p1, x.p2) == (a, b) || (x.p1, x.p2) == (b, a))
+                    .map(|x| x.id)
+                {
+                    if let Some(style) = line_style(l.style.as_deref())
+                        && let Some(line) = fig.lines.get_mut(&existing_line_id)
+                    {
+                        line.style = style;
+                    }
+                } else {
+                    let id = fig.add_segment(a, b);
+                    if let Some(style) = line_style(l.style.as_deref()) {
+                        fig.lines.get_mut(&id).unwrap().style = style;
+                    }
                 }
             }
             _ => warnings.push(format!("Đoạn {}{}: thiếu điểm", l.p1, l.p2)),
         }
     }
     for ra in &geom.right_angles {
-        let pts =
-            [&ra.vertex, &ra.arm1, &ra.arm2].map(|n| resolve(&mut fig, &mut ids, existing, n));
+        let pts = [&ra.vertex, &ra.arm1, &ra.arm2].map(|n| resolve(fig, &mut ids, existing, n));
         if let [Some(v), Some(a1), Some(a2)] = pts {
             fig.add_right_angle(v, a1, a2, 8.0);
         }
     }
     fig.auto_detect_intersections();
-    (fig, warnings)
+    warnings
 }
 
 /// POST one chat completion with curl (bundled with Windows 10+ and Linux).
@@ -435,20 +592,6 @@ mod imp {
         #[template_child]
         pub(crate) center_current_view_button: TemplateChild<Button>,
         #[template_child]
-        pub(crate) draw_circle_from_center: TemplateChild<Button>,
-        #[template_child]
-        pub(crate) draw_triangle_from_center: TemplateChild<Button>,
-        #[template_child]
-        pub(crate) draw_square_from_center: TemplateChild<Button>,
-        #[template_child]
-        pub(crate) quick_triangle: TemplateChild<Button>,
-        #[template_child]
-        pub(crate) quick_circle: TemplateChild<Button>,
-        #[template_child]
-        pub(crate) quick_tangent: TemplateChild<Button>,
-        #[template_child]
-        pub(crate) quick_centers: TemplateChild<Button>,
-        #[template_child]
         pub(crate) chat_scroller: TemplateChild<ScrolledWindow>,
         #[template_child]
         pub(crate) chat_box: TemplateChild<gtk4::Box>,
@@ -527,20 +670,28 @@ impl RnAiMenu {
 
     pub(crate) fn update_center_status(&self) {
         let imp = self.imp();
-        if let Some(canvas) = self.appwindow().and_then(|w| w.active_tab_canvas())
-            && let Some((pos, lbl)) = canvas.engine_ref().last_center_point()
-        {
-            let name = lbl.unwrap_or_else(|| "O".to_string());
-            imp.center_status_label.set_markup(&format!(
-                "🎯 Tâm đang chọn: <b>{}</b> ({:.0}, {:.0})",
-                glib::markup_escape_text(&name),
-                pos.x,
-                pos.y
-            ));
-            return;
+        if let Some(canvas) = self.appwindow().and_then(|w| w.active_tab_canvas()) {
+            let engine = canvas.engine_ref();
+            if let Some((_, summary)) = engine.selected_shape_summary() {
+                imp.center_status_label.set_markup(&format!(
+                    "Đang chọn: <b>{}</b> — AI sẽ chỉnh sửa trực tiếp trên hình này",
+                    glib::markup_escape_text(&summary),
+                ));
+                return;
+            }
+            if let Some((pos, lbl)) = engine.last_center_point() {
+                let name = lbl.unwrap_or_else(|| "O".to_string());
+                imp.center_status_label.set_markup(&format!(
+                    "Tâm đang chọn: <b>{}</b> ({:.0}, {:.0})",
+                    glib::markup_escape_text(&name),
+                    pos.x,
+                    pos.y
+                ));
+                return;
+            }
         }
         imp.center_status_label
-            .set_markup("⚪ Chưa chọn tâm (Bấm 'Chấm tâm' để chọn)");
+            .set_markup("Chưa chọn hình hoặc tâm (Nhấn vào hình trên bảng để sửa trực tiếp)");
     }
 
     pub(crate) fn init(&self, appwindow: &RnAppWindow) {
@@ -553,12 +704,10 @@ impl RnAiMenu {
         imp.api_key_entry.set_text(&config.api_key);
 
         self.append_ai_message(
-            "<b>✨ Trợ lý Hình học AI</b>\n\
-            Mô tả hình cần vẽ, AI sẽ dựng chính xác trên bảng (trung điểm, đường cao, đường tròn ngoại tiếp, tiếp tuyến... đều được tính đúng).\n\
-            • <i>vẽ tam giác ABC vuông tại A, AB = 4cm, AC = 3cm, kẻ đường cao AH</i>\n\
-            • <i>vẽ đường tròn (O) bán kính 3cm và hai tiếp tuyến từ điểm M</i>\n\
-            • <i>vẽ đường tròn ngoại tiếp tam giác ABC</i> (dùng các điểm đã có trên bảng)\n\
-            Cấu hình API ở mục ⚙ phía trên (dùng được mọi API tương thích OpenAI).",
+            "<b>Trợ lý Hình học AI</b>\n\
+            • Nhấn chọn một hình bất kỳ trên bảng rồi nhập lệnh (vd: <i>kẻ đường cao AH</i>, <i>vẽ đường tròn nội tiếp</i>, <i>đổi cạnh BC thành nét đứt</i>, <i>tăng bán kính lên 120</i>) để AI chỉnh sửa trực tiếp trên hình đó.\n\
+            • Hoặc nhập lệnh vẽ hình mới (vd: <i>vẽ tam giác ABC vuông tại A, AB = 4cm, AC = 3cm</i>).\n\
+            Mở mục <b>Cấu hình API</b> phía trên để thiết lập kết nối.",
         );
 
         let this = self.clone();
@@ -571,12 +720,12 @@ impl RnAiMenu {
             };
             match cfg.save() {
                 Ok(()) => this.append_ai_message(&format!(
-                    "💾 Đã lưu cấu hình: <b>{}</b> · mô hình <b>{}</b>",
+                    "Đã lưu cấu hình: <b>{}</b> · mô hình <b>{}</b>",
                     glib::markup_escape_text(&cfg.base_url),
                     glib::markup_escape_text(&cfg.model)
                 )),
                 Err(e) => this.append_ai_message(&format!(
-                    "⚠️ Không lưu được cấu hình: {}",
+                    "Không lưu được cấu hình: {}",
                     glib::markup_escape_text(&e.to_string())
                 )),
             }
@@ -595,7 +744,7 @@ impl RnAiMenu {
                 canvas.set_picking_center(true);
                 this.close_menu();
                 appwindow.overlays().dispatch_toast_text(
-                    "🎯 Hãy nhấp chuột hoặc chạm bút lên bảng vẽ để đặt điểm tâm... (Esc để huỷ)",
+                    "Hãy nhấp chuột hoặc chạm bút lên bảng vẽ để đặt điểm tâm (Esc để huỷ)",
                     None,
                 );
             }
@@ -620,40 +769,15 @@ impl RnAiMenu {
 
         let this = self.clone();
         imp.clear_center_button.connect_clicked(move |_| {
-            if let Some(canvas) = this.appwindow().and_then(|w| w.active_tab_canvas()) {
+            if let Some(appwindow) = this.appwindow()
+                && let Some(canvas) = appwindow.active_tab_canvas()
+            {
+                let flags = canvas.engine_mut().clear_shape_selection();
                 canvas.engine_mut().last_center_point = None;
+                appwindow.handle_widget_flags(flags, &canvas);
                 this.update_center_status();
             }
         });
-
-        // Quick buttons are just canned prompts
-        for (button, prompt) in [
-            (
-                &imp.draw_circle_from_center,
-                "vẽ đường tròn tâm O bán kính 90",
-            ),
-            (
-                &imp.draw_triangle_from_center,
-                "vẽ tam giác đều ABC nhận O làm trọng tâm",
-            ),
-            (
-                &imp.draw_square_from_center,
-                "vẽ hình vuông ABCD cạnh 160 nhận O làm tâm",
-            ),
-            (&imp.quick_triangle, "vẽ tam giác ABC"),
-            (&imp.quick_circle, "vẽ đường tròn tâm O bán kính 90"),
-            (
-                &imp.quick_tangent,
-                "vẽ đường tròn (O) và hai tiếp tuyến MA, MB từ điểm M nằm ngoài đường tròn",
-            ),
-            (
-                &imp.quick_centers,
-                "vẽ tam giác ABC và trọng tâm G, trực tâm H, tâm ngoại tiếp O, tâm nội tiếp I",
-            ),
-        ] {
-            let this = self.clone();
-            button.connect_clicked(move |_| this.handle_user_prompt(prompt));
-        }
 
         let this = self.clone();
         imp.send_button
@@ -718,25 +842,31 @@ impl RnAiMenu {
         self.append_user_message(prompt);
 
         let Some(canvas) = self.appwindow().and_then(|w| w.active_tab_canvas()) else {
-            self.append_ai_message("⚠️ Không tìm thấy trang vẽ đang mở.");
+            self.append_ai_message("Không tìm thấy trang vẽ đang mở.");
             return;
         };
         let cfg = AiConfig::load();
         if !cfg.is_complete() {
             self.append_ai_message(
-                "⚙️ Chưa cấu hình API. Mở mục <b>⚙ Cấu hình API</b>, nhập Base URL, Model, API key rồi bấm <b>Lưu</b>.",
+                "Chưa cấu hình API. Mở mục <b>Cấu hình API</b>, nhập Base URL, Model, API key rồi bấm <b>Lưu</b>.",
             );
             return;
         }
 
-        // Where the figure goes: the dotted center, else the middle of the visible area
-        let (anchor, existing) = {
+        // Check if the user has clicked/selected a shape on the canvas to edit in-place
+        let (selected_target, anchor, existing) = {
             let engine = canvas.engine_ref();
-            let anchor = engine
-                .last_center_point()
-                .map(|(p, _)| p)
+            let sel = engine.selected_shape_key().and_then(|key| {
+                let (origin, ctx) = engine.selected_shape_ai_context(key)?;
+                let fig = engine.stroke_as_math_figure(key)?;
+                Some((key, origin, ctx, fig))
+            });
+            let anchor = sel
+                .as_ref()
+                .map(|(_, origin, _, _)| *origin)
+                .or_else(|| engine.last_center_point().map(|(p, _)| p))
                 .unwrap_or_else(|| engine.camera.viewport_center());
-            (anchor, engine.named_figure_points())
+            (sel, anchor, engine.named_figure_points())
         };
         let existing_desc = if existing.is_empty() {
             "none".to_string()
@@ -747,13 +877,20 @@ impl RnAiMenu {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let user = format!(
-            "Anchor: ({:.0}, {:.0}).\nExisting points: {existing_desc}.\n\nRequest: {prompt}",
-            anchor.x, anchor.y
-        );
+        let user = if let Some((_, _, ref shape_ctx, _)) = selected_target {
+            format!(
+                "Anchor: ({:.0}, {:.0}).\nSelected shape (modify this shape in-place): {shape_ctx}.\nExisting canvas points: {existing_desc}.\n\nRequest: {prompt}",
+                anchor.x, anchor.y
+            )
+        } else {
+            format!(
+                "Anchor: ({:.0}, {:.0}).\nExisting points: {existing_desc}.\n\nRequest: {prompt}",
+                anchor.x, anchor.y
+            )
+        };
 
         self.append_ai_message(&format!(
-            "🤖 <b>{}</b> đang dựng hình...",
+            "<b>{}</b> đang xử lý...",
             glib::markup_escape_text(&cfg.model)
         ));
         let this = self.clone();
@@ -762,12 +899,41 @@ impl RnAiMenu {
             let mut geom = match reply.and_then(|r| parse_geometry(&r)) {
                 Ok(geom) => geom,
                 Err(e) => {
-                    this.append_ai_message(&format!("⚠️ {}", glib::markup_escape_text(&e)));
+                    this.append_ai_message(&glib::markup_escape_text(&e));
                     return;
                 }
             };
-            // Lines that already join two canvas points are restyled in place, not drawn over.
-            // Names the reply defines itself refer to new points, even if the canvas has the same name.
+
+            let explanation = geom.explanation.clone().unwrap_or_default();
+
+            // Case 1: Editing a clicked/selected shape in-place!
+            if let Some((sel_key, _, _, mut target_fig)) = selected_target {
+                let warnings = apply_geometry_to_figure(&mut target_fig, &geom, &existing);
+                if let Some(appwindow) = this.appwindow()
+                    && let Some(canvas) = appwindow.active_tab_canvas()
+                {
+                    let flags = canvas
+                        .engine_mut()
+                        .update_shape_with_figure(sel_key, target_fig);
+                    appwindow.handle_widget_flags(flags, &canvas);
+                    this.update_center_status();
+                }
+                let mut msg = if explanation.is_empty() {
+                    "Đã cập nhật hình đang chọn.".to_string()
+                } else {
+                    glib::markup_escape_text(&explanation).to_string()
+                };
+                if !warnings.is_empty() {
+                    msg.push_str(&format!(
+                        "\n<i>Bỏ qua: {}</i>",
+                        glib::markup_escape_text(&warnings.join("; "))
+                    ));
+                }
+                this.append_ai_message(&msg);
+                return;
+            }
+
+            // Case 2: No shape selected -> restyle existing lines or insert a new figure
             let defined: std::collections::HashSet<String> = geom
                 .points
                 .iter()
@@ -803,20 +969,16 @@ impl RnAiMenu {
                 });
             }
             let (fig, warnings) = build_figure(&geom, &existing);
-            let explanation = geom.explanation.unwrap_or_default();
             if fig.points.is_empty() && restyled > 0 {
-                this.append_ai_message(&format!("✨ {}", glib::markup_escape_text(&explanation)));
+                this.append_ai_message(&glib::markup_escape_text(&explanation));
                 return;
             }
             if fig.points.is_empty() {
-                this.append_ai_message(&format!(
-                    "💬 {}",
-                    glib::markup_escape_text(if explanation.is_empty() {
-                        "AI không trả về hình nào để vẽ."
-                    } else {
-                        &explanation
-                    })
-                ));
+                this.append_ai_message(&glib::markup_escape_text(if explanation.is_empty() {
+                    "AI không trả về hình nào để vẽ."
+                } else {
+                    &explanation
+                }));
                 return;
             }
             if let Some(appwindow) = this.appwindow()
@@ -825,7 +987,7 @@ impl RnAiMenu {
                 let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
                 appwindow.handle_widget_flags(flags, &canvas);
             }
-            let mut msg = format!("✨ {}", glib::markup_escape_text(&explanation));
+            let mut msg = glib::markup_escape_text(&explanation).to_string();
             if !warnings.is_empty() {
                 msg.push_str(&format!(
                     "\n<i>Bỏ qua: {}</i>",
@@ -921,5 +1083,34 @@ mod tests {
         let (fig, _) = build_figure(&parse_geometry(reply).unwrap(), &[]);
         assert!(fig.lines.values().all(|l| l.style == LineStyle::Dashed));
         assert!(fig.circles.values().all(|c| c.style == LineStyle::Dashed));
+    }
+
+    #[test]
+    fn edits_selected_figure_in_place() {
+        let mut fig = MathFigure::new();
+        fig.build_triangle(
+            Vector2::new(0.0, 0.0),
+            Vector2::new(160.0, 0.0),
+            Vector2::new(0.0, 120.0),
+            Some(["A", "B", "C"]),
+        );
+
+        let reply = r#"{"explanation": "Kẻ đường cao AH và đổi cạnh BC thành nét đứt",
+         "constructions": [{"op": "altitude", "of": ["A", "B", "C"], "name": "H"}],
+         "lines": [{"p1": "B", "p2": "C", "style": "dashed"}]}"#;
+        let geom = parse_geometry(reply).unwrap();
+        let warnings = apply_geometry_to_figure(&mut fig, &geom, &[]);
+        assert!(warnings.is_empty());
+        assert!(fig.find_point_by_label("H").is_some());
+        let bc = fig
+            .lines
+            .values()
+            .find(|l| {
+                let b = fig.find_point_by_label("B").unwrap();
+                let c = fig.find_point_by_label("C").unwrap();
+                (l.p1 == b && l.p2 == c) || (l.p1 == c && l.p2 == b)
+            })
+            .unwrap();
+        assert_eq!(bc.style, LineStyle::Dashed);
     }
 }

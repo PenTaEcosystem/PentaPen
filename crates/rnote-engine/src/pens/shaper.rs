@@ -19,9 +19,10 @@ use rnote_compose::builders::{
     MathPointBuilder, MathTriangleBuilder, PolygonBuilder, PolylineBuilder, QuadBezBuilder,
     QuadrantCoordSystem2DBuilder, RectangleBuilder, ShapeBuilderType,
 };
+use rnote_compose::constraints::ConstraintRatio;
 use rnote_compose::eventresult::{EventPropagation, EventResult};
 use rnote_compose::ext::Vector2Ext;
-use rnote_compose::geometry::{CircleId, LineStyle, MathFigure, PointId};
+use rnote_compose::geometry::{CircleId, LineId, LineStyle, MathFigure, PointId};
 use rnote_compose::penevent::{KeyboardKey, ModifierKey, PenEvent, PenProgress};
 use rnote_compose::penpath::Element;
 use rnote_compose::shapes::Shapeable;
@@ -56,6 +57,8 @@ pub enum HandleKind {
 pub struct SelectedShapeData {
     pub key: StrokeKey,
     pub point: Option<PointId>,
+    /// Selected sub-segment (region between intersections/vertices) when clicked on a segment
+    pub segment: Option<LineId>,
     /// Where the shape was last clicked: D restyles the line or circle there.
     pub click: Vector2,
 }
@@ -86,6 +89,24 @@ impl Default for Shaper {
             state: ShaperState::Idle,
             hovered_stroke: None,
             active_snap: None,
+        }
+    }
+}
+
+impl Shaper {
+    /// Returns the stroke key currently selected for manipulation in Shaper, if any.
+    pub fn selected_stroke_key(&self) -> Option<StrokeKey> {
+        match &self.state {
+            ShaperState::Manipulating { selected, .. } => Some(selected.key),
+            _ => None,
+        }
+    }
+
+    /// Clear any active shape selection in Shaper.
+    pub fn clear_selection(&mut self) {
+        if matches!(self.state, ShaperState::Manipulating { .. }) {
+            self.state = ShaperState::Idle;
+            self.active_snap = None;
         }
     }
 }
@@ -156,12 +177,19 @@ impl PenBehaviour for Shaper {
                 if let Some(hit_key) =
                     hit_test_stroke(element.pos, engine_view.store, hit_threshold)
                 {
+                    let pt = figure_of(engine_view.store, hit_key)
+                        .and_then(|fig| nearest_figure_point(fig, element.pos, hit_threshold));
+                    let seg = if pt.is_none() {
+                        figure_of(engine_view.store, hit_key)
+                            .and_then(|fig| nearest_figure_segment(fig, element.pos, hit_threshold))
+                    } else {
+                        None
+                    };
                     self.state = ShaperState::Manipulating {
                         selected: SelectedShapeData {
                             key: hit_key,
-                            point: figure_of(engine_view.store, hit_key).and_then(|fig| {
-                                nearest_figure_point(fig, element.pos, hit_threshold)
-                            }),
+                            point: pt,
+                            segment: seg,
                             click: element.pos,
                         },
                         active_handle: None,
@@ -267,6 +295,13 @@ impl PenBehaviour for Shaper {
                             HandleKind::FigurePoint(id) => Some(id),
                             _ => None,
                         };
+                        selected.segment = if selected.point.is_none() {
+                            figure_of(engine_view.store, selected.key).and_then(|fig| {
+                                nearest_figure_segment(fig, element.pos, hit_threshold)
+                            })
+                        } else {
+                            None
+                        };
                         selected.click = element.pos;
                         widget_flags.redraw = true;
                         *active_handle = Some(h);
@@ -288,6 +323,13 @@ impl PenBehaviour for Shaper {
                         selected.click = element.pos;
                         selected.point = figure_of(engine_view.store, other_key)
                             .and_then(|fig| nearest_figure_point(fig, element.pos, hit_threshold));
+                        selected.segment = if selected.point.is_none() {
+                            figure_of(engine_view.store, other_key).and_then(|fig| {
+                                nearest_figure_segment(fig, element.pos, hit_threshold)
+                            })
+                        } else {
+                            None
+                        };
                         *active_handle = None;
                         *last_drag_pos = Some(element.pos);
                         widget_flags.redraw = true;
@@ -491,21 +533,29 @@ impl PenBehaviour for Shaper {
                     .shaper_config
                     .constraints
                     .clone();
-                constraints.enabled = match event {
-                    PenEvent::Down {
-                        ref modifier_keys, ..
+                let shift_held = match &event {
+                    PenEvent::Down { modifier_keys, .. }
+                    | PenEvent::Up { modifier_keys, .. }
+                    | PenEvent::Proximity { modifier_keys, .. }
+                    | PenEvent::KeyPressed { modifier_keys, .. } => {
+                        modifier_keys.contains(&ModifierKey::KeyboardShift)
                     }
-                    | PenEvent::Up {
-                        ref modifier_keys, ..
-                    }
-                    | PenEvent::Proximity {
-                        ref modifier_keys, ..
-                    }
-                    | PenEvent::KeyPressed {
-                        ref modifier_keys, ..
-                    } => constraints.enabled ^ modifier_keys.contains(&ModifierKey::KeyboardCtrl),
                     PenEvent::Text { .. } | PenEvent::Cancel => false,
                 };
+                constraints.enabled = match &event {
+                    PenEvent::Down { modifier_keys, .. }
+                    | PenEvent::Up { modifier_keys, .. }
+                    | PenEvent::Proximity { modifier_keys, .. }
+                    | PenEvent::KeyPressed { modifier_keys, .. } => {
+                        shift_held
+                            || (constraints.enabled
+                                ^ modifier_keys.contains(&ModifierKey::KeyboardCtrl))
+                    }
+                    PenEvent::Text { .. } | PenEvent::Cancel => false,
+                };
+                if shift_held {
+                    constraints.ratios.insert(ConstraintRatio::OneToOne);
+                }
 
                 // Magnetic Snapping during building
                 match &mut event {
@@ -570,7 +620,31 @@ impl PenBehaviour for Shaper {
                             .filter(|s| !is_redundant_figure(s, engine_view.store))
                             .collect();
                         let shapes_emitted = !shapes.is_empty();
+                        let mut auto_select: Option<SelectedShapeData> = None;
+
                         for mut shape in shapes {
+                            // Promote plain Line to MathFigure when auto-intersections are enabled
+                            // so crossings with existing lines/circles pop up and split into selectable regions
+                            if let Shape::Line(ref line) = shape
+                                && engine_view
+                                    .config
+                                    .pens_config
+                                    .shaper_config
+                                    .math_auto_intersections
+                                && (line.end - line.start).length() >= 2.0
+                            {
+                                let mut labels = free_labels(engine_view.store, 2).into_iter();
+                                let mut fig = MathFigure::new();
+                                fig.build_line(
+                                    line.start,
+                                    line.end,
+                                    labels.next().as_deref(),
+                                    labels.next().as_deref(),
+                                );
+                                shape = Shape::MathFigure(fig);
+                            }
+
+                            let mut created_intersections = Vec::new();
                             if let Shape::MathFigure(ref mut fig) = shape {
                                 if engine_view
                                     .config
@@ -578,9 +652,20 @@ impl PenBehaviour for Shaper {
                                     .shaper_config
                                     .math_auto_intersections
                                 {
-                                    fig.auto_detect_intersections();
+                                    created_intersections.extend(fig.auto_detect_intersections());
                                     let (segments, circles) = page_geometry(engine_view.store);
-                                    fig.add_intersections_with(&segments, &circles);
+                                    let cross_pts = fig.add_intersections_with(&segments, &circles);
+                                    if !cross_pts.is_empty() {
+                                        let cross_coords: Vec<Vector2> = cross_pts
+                                            .iter()
+                                            .filter_map(|id| fig.points.get(id).map(|p| p.pos))
+                                            .collect();
+                                        propagate_intersections_to_existing_strokes(
+                                            &cross_coords,
+                                            engine_view,
+                                        );
+                                    }
+                                    created_intersections.extend(cross_pts);
                                 }
                                 if engine_view
                                     .config
@@ -591,6 +676,14 @@ impl PenBehaviour for Shaper {
                                     fig.auto_detect_triangles_and_centers(true);
                                 }
                             }
+                            let first_inter = created_intersections.first().copied();
+                            let first_pos = match (&shape, first_inter) {
+                                (Shape::MathFigure(fig), Some(pid)) => {
+                                    fig.points.get(&pid).map(|p| p.pos)
+                                }
+                                _ => None,
+                            };
+
                             let key = engine_view.store.insert_stroke(
                                 Stroke::ShapeStroke(ShapeStroke::new(shape, style.clone())),
                                 None,
@@ -601,9 +694,25 @@ impl PenBehaviour for Shaper {
                                 engine_view.camera.viewport(),
                                 engine_view.camera.image_scale(),
                             );
+
+                            if let (Some(pid), Some(pos)) = (first_inter, first_pos) {
+                                auto_select = Some(SelectedShapeData {
+                                    key,
+                                    point: Some(pid),
+                                    segment: None,
+                                    click: pos,
+                                });
+                            }
                         }
 
-                        self.state = ShaperState::Idle;
+                        self.state = match auto_select {
+                            Some(selected) => ShaperState::Manipulating {
+                                selected,
+                                active_handle: None,
+                                last_drag_pos: None,
+                            },
+                            None => ShaperState::Idle,
+                        };
                         self.active_snap = None;
 
                         if engine_view.config.pens_config.shaper_config.builder_type
@@ -682,13 +791,33 @@ impl DrawableOnDoc for Shaper {
         // 2. Manipulating handles if a shape is selected
         if let ShaperState::Manipulating { selected, .. } = &self.state {
             if let Some(Stroke::ShapeStroke(ss)) = engine_view.store.get_stroke_ref(selected.key) {
-                draw_manipulating_handles(cx, &ss.shape, zoom, selected.point)?;
+                draw_manipulating_handles(cx, &ss.shape, zoom, selected.point, selected.segment)?;
             }
         }
 
-        // 3. Current builder shape
+        // 3. Current builder shape + live intersection pop-ups while drawing a line
         if let ShaperState::BuildShape { builder } = &self.state {
             builder.draw_styled(cx, &style, zoom);
+            if let Some((p1, p2)) = builder.active_segment()
+                && (p2 - p1).length() >= 2.0
+            {
+                let (segments, circles) = page_geometry(engine_view.store);
+                let mut preview = MathFigure::new();
+                preview.build_line(p1, p2, None, None);
+                let inter_ids = preview.add_intersections_with(&segments, &circles);
+                for pid in inter_ids {
+                    if let Some(pt) = preview.points.get(&pid) {
+                        let p = pt.pos.to_kurbo_point();
+                        let halo = kurbo::Circle::new(p, 9.5 / zoom);
+                        cx.fill(halo, &piet::Color::rgba8(224, 27, 36, 75));
+                        let ring = kurbo::Circle::new(p, 6.2 / zoom);
+                        cx.fill(ring, &piet::Color::rgba8(255, 255, 255, 250));
+                        cx.stroke(ring, &piet::Color::rgba8(224, 27, 36, 240), 2.2 / zoom);
+                        let dot = kurbo::Circle::new(p, 3.0 / zoom);
+                        cx.fill(dot, &piet::Color::rgba8(224, 27, 36, 255));
+                    }
+                }
+            }
         }
 
         // 4. Magnetic Snap Visual Overlay
@@ -739,10 +868,12 @@ fn draw_manipulating_handles(
     shape: &Shape,
     zoom: f64,
     selected_point: Option<PointId>,
+    selected_segment: Option<LineId>,
 ) -> anyhow::Result<()> {
     let border_color = piet::Color::rgba8(28, 113, 216, 255);
     let white_fill = piet::Color::rgba8(255, 255, 255, 255);
     let line_dash_color = piet::Color::rgba8(53, 132, 228, 160);
+    let active_seg_color = piet::Color::rgba8(230, 97, 0, 230);
 
     match shape {
         Shape::Line(line) => {
@@ -769,7 +900,8 @@ fn draw_manipulating_handles(
         }
         Shape::Ellipse(ellipse) => {
             let center = ellipse.affine.translation;
-            let r = (ellipse.radii.x + ellipse.radii.y) * 0.5;
+            let rx = ellipse.radii.x;
+            let ry = ellipse.radii.y;
 
             // Highlight ring
             cx.stroke(ellipse.outline_path(), &line_dash_color, 1.5 / zoom);
@@ -782,7 +914,7 @@ fn draw_manipulating_handles(
             cx.fill(dot_o, &border_color);
 
             // Radius guide line to right handle
-            let right_p = center + Vector2::new(r, 0.0);
+            let right_p = center + Vector2::new(rx, 0.0);
             cx.stroke(
                 kurbo::Line::new(center.to_kurbo_point(), right_p.to_kurbo_point()),
                 &line_dash_color,
@@ -791,10 +923,10 @@ fn draw_manipulating_handles(
 
             // 4 Perimeter handles
             let cardinal = [
-                center + Vector2::new(r, 0.0),
-                center - Vector2::new(r, 0.0),
-                center + Vector2::new(0.0, r),
-                center - Vector2::new(0.0, r),
+                center + Vector2::new(rx, 0.0),
+                center - Vector2::new(rx, 0.0),
+                center + Vector2::new(0.0, ry),
+                center - Vector2::new(0.0, ry),
             ];
             for p in cardinal {
                 let h = kurbo::Circle::new(p.to_kurbo_point(), 5.0 / zoom);
@@ -812,21 +944,37 @@ fn draw_manipulating_handles(
             for l in fig.lines.values() {
                 if let (Some(p1), Some(p2)) = (fig.points.get(&l.p1), fig.points.get(&l.p2)) {
                     let k_line = kurbo::Line::new(p1.pos.to_kurbo_point(), p2.pos.to_kurbo_point());
-                    cx.stroke(k_line, &line_dash_color, 2.0 / zoom);
+                    if selected_segment == Some(l.id) {
+                        cx.stroke(k_line, &active_seg_color, 4.2 / zoom);
+                    } else {
+                        cx.stroke(k_line, &line_dash_color, 2.0 / zoom);
+                    }
                 }
             }
             // Every point is a drag handle (see hit_test_handle)
+            let seg_endpoints = selected_segment
+                .and_then(|lid| fig.lines.get(&lid))
+                .map(|l| (l.p1, l.p2));
             for p in fig.points.values() {
-                let h = kurbo::Circle::new(p.pos.to_kurbo_point(), 6.0 / zoom);
+                let is_active = selected_point == Some(p.id)
+                    || seg_endpoints.is_some_and(|(a, b)| p.id == a || p.id == b);
+                let radius = if p.label.is_none() || is_active {
+                    7.0 / zoom
+                } else {
+                    6.0 / zoom
+                };
+                let h = kurbo::Circle::new(p.pos.to_kurbo_point(), radius);
                 cx.fill(
                     h,
                     if selected_point == Some(p.id) {
                         &border_color
+                    } else if seg_endpoints.is_some_and(|(a, b)| p.id == a || p.id == b) {
+                        &active_seg_color
                     } else {
                         &white_fill
                     },
                 );
-                cx.stroke(h, &border_color, 2.0 / zoom);
+                cx.stroke(h, &border_color, 2.2 / zoom);
             }
         }
         _ => {}
@@ -926,22 +1074,77 @@ fn hit_test_stroke(
     store: &crate::store::StrokeStore,
     threshold: f64,
 ) -> Option<StrokeKey> {
-    store.stroke_keys_unordered().into_iter().find(|&key| {
+    let mut best_point_hit: Option<(StrokeKey, f64)> = None;
+    let mut best_body_hit: Option<(StrokeKey, f64)> = None;
+
+    for key in store.stroke_keys_unordered() {
         let Some(Stroke::ShapeStroke(ss)) = store.get_stroke_ref(key) else {
-            return false;
+            continue;
         };
         match &ss.shape {
-            Shape::Line(line) => dist_to_segment(pos, line.start, line.end) <= threshold,
+            Shape::Line(line) => {
+                let d_end = (pos - line.start).length().min((pos - line.end).length());
+                if d_end <= threshold {
+                    if best_point_hit.is_none_or(|(_, best)| d_end < best) {
+                        best_point_hit = Some((key, d_end));
+                    }
+                } else {
+                    let d_seg = dist_to_segment(pos, line.start, line.end);
+                    if d_seg <= threshold && best_body_hit.is_none_or(|(_, best)| d_seg < best) {
+                        best_body_hit = Some((key, d_seg));
+                    }
+                }
+            }
             Shape::Ellipse(ellipse) => {
                 let center = ellipse.affine.translation;
                 let r = (ellipse.radii.x + ellipse.radii.y) * 0.5;
                 let d_center = (pos - center).length();
-                d_center <= threshold || (d_center - r).abs() <= threshold
+                if d_center <= threshold {
+                    if best_point_hit.is_none_or(|(_, best)| d_center < best) {
+                        best_point_hit = Some((key, d_center));
+                    }
+                } else {
+                    let d_ring = (d_center - r).abs();
+                    if d_ring <= threshold && best_body_hit.is_none_or(|(_, best)| d_ring < best) {
+                        best_body_hit = Some((key, d_ring));
+                    }
+                }
             }
-            Shape::MathFigure(_) => hit_test_handle(pos, &ss.shape, threshold).is_some(),
-            _ => false,
+            Shape::MathFigure(fig) => {
+                if let Some(pid) = nearest_figure_point(fig, pos, threshold)
+                    && let Some(pt) = fig.points.get(&pid)
+                {
+                    let d = (pos - pt.pos).length();
+                    if best_point_hit.is_none_or(|(_, best)| d < best) {
+                        best_point_hit = Some((key, d));
+                    }
+                } else if hit_test_handle(pos, &ss.shape, threshold).is_some() {
+                    let d_seg = fig
+                        .lines
+                        .values()
+                        .filter_map(|l| {
+                            Some(dist_to_segment(
+                                pos,
+                                fig.points.get(&l.p1)?.pos,
+                                fig.points.get(&l.p2)?.pos,
+                            ))
+                        })
+                        .chain(fig.circles.values().filter_map(|c| {
+                            Some(((pos - fig.points.get(&c.center)?.pos).length() - c.radius).abs())
+                        }))
+                        .fold(threshold, f64::min);
+                    if best_body_hit.is_none_or(|(_, best)| d_seg < best) {
+                        best_body_hit = Some((key, d_seg));
+                    }
+                }
+            }
+            _ => {}
         }
-    })
+    }
+
+    best_point_hit
+        .map(|(k, _)| k)
+        .or_else(|| best_body_hit.map(|(k, _)| k))
 }
 
 fn hit_test_handle(pos: Vector2, shape: &Shape, threshold: f64) -> Option<HandleKind> {
@@ -960,15 +1163,17 @@ fn hit_test_handle(pos: Vector2, shape: &Shape, threshold: f64) -> Option<Handle
         }
         Shape::Ellipse(ellipse) => {
             let center = ellipse.affine.translation;
-            let r = (ellipse.radii.x + ellipse.radii.y) * 0.5;
+            let rx = ellipse.radii.x;
+            let ry = ellipse.radii.y;
+            let r = (rx + ry) * 0.5;
             if (pos - center).length() <= threshold {
                 return Some(HandleKind::CircleCenter);
             }
             let cardinal = [
-                center + Vector2::new(r, 0.0),
-                center - Vector2::new(r, 0.0),
-                center + Vector2::new(0.0, r),
-                center - Vector2::new(0.0, r),
+                center + Vector2::new(rx, 0.0),
+                center - Vector2::new(rx, 0.0),
+                center + Vector2::new(0.0, ry),
+                center - Vector2::new(0.0, ry),
             ];
             for (i, &p) in cardinal.iter().enumerate() {
                 if (pos - p).length() <= threshold {
@@ -1011,6 +1216,7 @@ fn apply_handle_drag(
     last_drag_pos: Option<Vector2>,
     engine_view: &mut EngineViewMut,
 ) {
+    let mut synced_old_pos: Option<Vector2> = None;
     if let Some(Stroke::ShapeStroke(ss)) = engine_view.store.get_stroke_mut(key) {
         match (&mut ss.shape, handle) {
             (Shape::Line(line), HandleKind::LineStart) => {
@@ -1042,6 +1248,7 @@ fn apply_handle_drag(
                         fig.translate(offset);
                     }
                 } else {
+                    synced_old_pos = fig.points.get(&id).map(|p| p.pos);
                     fig.drag_point(id, current_pos);
                 }
             }
@@ -1067,12 +1274,38 @@ fn apply_handle_drag(
             _ => {}
         }
     }
-    engine_view.store.update_geometry_for_strokes(&[key]);
-    engine_view.store.regenerate_rendering_for_stroke(
-        key,
-        engine_view.camera.viewport(),
-        engine_view.camera.image_scale(),
-    );
+
+    let mut updated_keys = vec![key];
+    // If an intersection/shared point was dragged, also move any coincident point on other figures
+    // so all lines meeting at an intersection adjust together smoothly.
+    if let Some(old_pos) = synced_old_pos {
+        for other_key in engine_view.store.stroke_keys_unordered() {
+            if other_key == key {
+                continue;
+            }
+            let mut moved = false;
+            if let Some(Stroke::ShapeStroke(ss)) = engine_view.store.get_stroke_mut(other_key)
+                && let Shape::MathFigure(other_fig) = &mut ss.shape
+                && let Some(other_pt_id) = other_fig.find_point_near(old_pos, 2.5)
+                && !other_fig.circles.values().any(|c| c.center == other_pt_id)
+            {
+                other_fig.drag_point(other_pt_id, current_pos);
+                moved = true;
+            }
+            if moved {
+                updated_keys.push(other_key);
+            }
+        }
+    }
+
+    engine_view.store.update_geometry_for_strokes(&updated_keys);
+    for k in updated_keys {
+        engine_view.store.regenerate_rendering_for_stroke(
+            k,
+            engine_view.camera.viewport(),
+            engine_view.camera.image_scale(),
+        );
+    }
 }
 
 fn dist_to_segment(p: Vector2, a: Vector2, b: Vector2) -> f64 {
@@ -1143,6 +1376,96 @@ fn nearest_figure_point(fig: &MathFigure, pos: Vector2, threshold: f64) -> Optio
         .filter(|&(_, d)| d <= threshold)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, _)| id)
+}
+
+/// The figure sub-segment (region between intersections/vertices) nearest to `pos`, if within `threshold`.
+fn nearest_figure_segment(fig: &MathFigure, pos: Vector2, threshold: f64) -> Option<LineId> {
+    fig.lines
+        .values()
+        .filter(|l| l.visible)
+        .filter_map(|l| {
+            let p1 = fig.points.get(&l.p1)?.pos;
+            let p2 = fig.points.get(&l.p2)?.pos;
+            let d = dist_to_segment(pos, p1, p2);
+            (d <= threshold).then_some((l.id, d))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(id, _)| id)
+}
+
+/// Propagate newly discovered intersection coordinates onto any crossed existing strokes on the page,
+/// splitting their crossed segments so both lines share the intersection point and sub-segments.
+fn propagate_intersections_to_existing_strokes(
+    intersections: &[Vector2],
+    engine_view: &mut EngineViewMut,
+) {
+    if intersections.is_empty() {
+        return;
+    }
+    let keys = engine_view.store.stroke_keys_unordered();
+    let mut modified_keys = Vec::new();
+
+    for key in keys {
+        let mut changed = false;
+        if let Some(Stroke::ShapeStroke(ss)) = engine_view.store.get_stroke_mut(key) {
+            // Upgrade plain Shape::Line to Shape::MathFigure if an intersection lies on it
+            if let Shape::Line(line) = &ss.shape {
+                let hits_line = intersections
+                    .iter()
+                    .any(|&pt| dist_to_segment(pt, line.start, line.end) <= 1.5);
+                if hits_line {
+                    let mut fig = MathFigure::new();
+                    fig.build_line(line.start, line.end, None, None);
+                    ss.shape = Shape::MathFigure(fig);
+                    changed = true;
+                }
+            }
+
+            if let Shape::MathFigure(fig) = &mut ss.shape {
+                for &pt in intersections {
+                    let on_seg = fig.lines.values().any(|l| {
+                        let Some(p1) = fig.points.get(&l.p1) else {
+                            return false;
+                        };
+                        let Some(p2) = fig.points.get(&l.p2) else {
+                            return false;
+                        };
+                        dist_to_segment(pt, p1.pos, p2.pos) <= 1.5
+                    });
+                    let on_circ = fig.circles.values().any(|c| {
+                        let Some(center) = fig.points.get(&c.center) else {
+                            return false;
+                        };
+                        ((pt - center.pos).length() - c.radius).abs() <= 1.5
+                    });
+
+                    if on_seg || on_circ {
+                        let pt_id = fig
+                            .find_point_near(pt, 0.5)
+                            .unwrap_or_else(|| fig.add_point(pt, None));
+                        fig.split_segments_at_point(pt_id, 1.5);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if changed {
+            modified_keys.push(key);
+        }
+    }
+
+    if !modified_keys.is_empty() {
+        engine_view
+            .store
+            .update_geometry_for_strokes(&modified_keys);
+        for key in modified_keys {
+            engine_view.store.regenerate_rendering_for_stroke(
+                key,
+                engine_view.camera.viewport(),
+                engine_view.camera.image_scale(),
+            );
+        }
+    }
 }
 
 fn shortcut_builder_type(key: KeyboardKey) -> Option<ShapeBuilderType> {

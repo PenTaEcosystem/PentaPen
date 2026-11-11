@@ -101,6 +101,26 @@ impl PenHolder {
         }
     }
 
+    /// Returns the stroke key currently selected in the Shaper pen, if active.
+    pub fn selected_shaper_stroke(&self) -> Option<crate::store::StrokeKey> {
+        match &self.current_pen {
+            Pen::Shaper(shaper) => shaper.selected_stroke_key(),
+            _ => None,
+        }
+    }
+
+    /// Clear any active selection in the Shaper pen.
+    pub fn clear_shaper_selection(&mut self) -> bool {
+        if let Pen::Shaper(shaper) = &mut self.current_pen
+            && shaper.selected_stroke_key().is_some()
+        {
+            shaper.clear_selection();
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn current_pen_ref(&mut self) -> &Pen {
         &self.current_pen
     }

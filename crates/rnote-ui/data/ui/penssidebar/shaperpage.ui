@@ -142,7 +142,7 @@
                 <object class="AdwSwitchRow" id="math_show_centers_row">
                   <property name="title" translatable="yes">Show Classical Centers</property>
                   <property name="subtitle" translatable="yes">Display Orthocenter (H), Centroid (G), etc.</property>
-                  <property name="active">true</property>
+                  <property name="active">false</property>
                 </object>
               </child>
             </object>

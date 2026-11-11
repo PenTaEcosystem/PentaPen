@@ -45,11 +45,14 @@ impl Buildable for LineBuilder {
         constraints.ratios.insert(ConstraintRatio::Vertical);
 
         let progress = match event {
-            PenEvent::Down { element, .. } => {
+            PenEvent::Down { element, .. } | PenEvent::Proximity { element, .. } => {
                 self.current = constraints.constrain(element.pos - self.start) + self.start;
                 BuilderProgress::InProgress
             }
-            PenEvent::Up { .. } => {
+            PenEvent::Up { element, .. } => {
+                if (element.pos - self.start).length() >= 1.0 {
+                    self.current = constraints.constrain(element.pos - self.start) + self.start;
+                }
                 BuilderProgress::Finished(vec![Shape::Line(self.state_as_line())])
             }
             _ => BuilderProgress::InProgress,
@@ -78,6 +81,10 @@ impl Buildable for LineBuilder {
         indicators::draw_pos_indicator(cx, PenState::Up, self.start, zoom);
         indicators::draw_pos_indicator(cx, PenState::Down, self.current, zoom);
         cx.restore().unwrap();
+    }
+
+    fn active_segment(&self) -> Option<(Vector2, Vector2)> {
+        ((self.current - self.start).length() >= 2.0).then_some((self.start, self.current))
     }
 }
 

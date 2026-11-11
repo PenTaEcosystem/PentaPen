@@ -230,6 +230,27 @@ mod imp {
             obj.add_controller(self.key_controller.clone());
             obj.add_controller(self.drop_target.clone());
 
+            // Double-click on a geometry point opens its editor. Only observes, never claims,
+            // and opens after the release so the pen still receives it.
+            let double_click = gtk4::GestureClick::builder()
+                .button(0)
+                .propagation_phase(PropagationPhase::Capture)
+                .build();
+            double_click.connect_released(clone!(
+                #[weak(rename_to=canvas)]
+                obj,
+                move |_, n_press, x, y| {
+                    if n_press == 2 {
+                        glib::idle_add_local_once(clone!(
+                            #[weak]
+                            canvas,
+                            move || super::input::open_point_editor(&canvas, x, y)
+                        ));
+                    }
+                }
+            ));
+            obj.add_controller(double_click);
+
             // receive and handle engine tasks
             let engine_task_handler_handle = glib::spawn_future_local(clone!(
                 #[weak(rename_to=canvas)]

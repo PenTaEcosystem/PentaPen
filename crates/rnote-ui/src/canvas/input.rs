@@ -345,28 +345,15 @@ pub(crate) fn handle_key_controller_key_pressed(
     }
 
     let pen_style = canvas.engine_ref().current_pen_style_w_override();
-    if pen_style != PenStyle::Typewriter
+    let plain =
+        !gdk_modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK);
+    // Other pens switch to the geometry tools right away; the shaper sees the key first (it may be mid-shape).
+    if plain
+        && pen_style != PenStyle::Typewriter
         && pen_style != PenStyle::Shaper
-        && !gdk_modifiers.contains(gdk::ModifierType::CONTROL_MASK)
-        && !gdk_modifiers.contains(gdk::ModifierType::ALT_MASK)
+        && activate_geometry_shortcut(canvas, gdk_key, true)
     {
-        if let Some(appwindow) = canvas
-            .root()
-            .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
-        {
-            let action_name = match gdk_key {
-                gdk::Key::l | gdk::Key::L => Some("win.shape-line"),
-                gdk::Key::r | gdk::Key::R => Some("win.shape-circle"),
-                gdk::Key::s | gdk::Key::S => Some("win.shape-square"),
-                gdk::Key::p | gdk::Key::P => Some("win.shape-point"),
-                gdk::Key::o | gdk::Key::O => Some("win.pick-center"),
-                _ => None,
-            };
-            if let Some(action) = action_name {
-                gtk4::gio::prelude::ActionGroupExt::activate_action(&appwindow, action, None);
-                return glib::Propagation::Stop;
-            }
-        }
+        return glib::Propagation::Stop;
     }
 
     let keyboard_key = retrieve_keyboard_key(gdk_key);
@@ -389,24 +376,145 @@ pub(crate) fn handle_key_controller_key_pressed(
     };
 
     canvas.emit_handle_widget_flags(widget_flags);
-    if pen_style == PenStyle::Shaper
+    if plain
+        && pen_style == PenStyle::Shaper
         && propagation.into_glib() == glib::Propagation::Proceed
-        && !gdk_modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK)
-        && matches!(gdk_key, gdk::Key::o | gdk::Key::O)
+        && activate_geometry_shortcut(canvas, gdk_key, false)
     {
-        if let Some(appwindow) = canvas
-            .root()
-            .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
-        {
-            gtk4::gio::prelude::ActionGroupExt::activate_action(
-                &appwindow,
-                "win.pick-center",
-                None,
-            );
-            return glib::Propagation::Stop;
-        }
+        return glib::Propagation::Stop;
     }
     propagation.into_glib()
+}
+
+/// Single-key geometry shortcuts (also listed in the shortcuts window).
+/// `with_tools`: include the tool keys, which the shaper itself handles while it is active.
+fn activate_geometry_shortcut(canvas: &RnCanvas, gdk_key: gdk::Key, with_tools: bool) -> bool {
+    let tool = |name: &str| Some(("win.math-tool", Some(name.to_variant())));
+    let action = match gdk_key.to_lower() {
+        gdk::Key::p if with_tools => tool("point"),
+        gdk::Key::l if with_tools => tool("line"),
+        gdk::Key::c | gdk::Key::r if with_tools => tool("circle"),
+        gdk::Key::t if with_tools => tool("triangle"),
+        gdk::Key::s if with_tools => tool("rectangle"),
+        gdk::Key::o => Some(("win.pick-center", None)),
+        gdk::Key::a => Some(("win.ai-assistant", None)),
+        _ => None,
+    };
+    let (Some((name, target)), Some(appwindow)) = (
+        action,
+        canvas
+            .root()
+            .and_then(|r| r.downcast::<crate::RnAppWindow>().ok()),
+    ) else {
+        return false;
+    };
+    gtk4::gio::prelude::ActionGroupExt::activate_action(&appwindow, name, target.as_ref());
+    true
+}
+
+/// Double-click on a geometry point (shaper only): small popover to rename it or set exact coordinates.
+pub(crate) fn open_point_editor(canvas: &RnCanvas, x: f64, y: f64) {
+    if canvas.engine_ref().current_pen_style_w_override() != PenStyle::Shaper {
+        return;
+    }
+    let (doc_pos, tolerance) = {
+        let engine = canvas.engine_ref();
+        (
+            engine
+                .camera
+                .transform()
+                .inverse()
+                .transform_point2(Vector2::new(x, y)),
+            12.0 / engine.camera.total_zoom(),
+        )
+    };
+    let Some((key, id, label, pos)) = canvas.engine_ref().figure_point_at(doc_pos, tolerance)
+    else {
+        return;
+    };
+
+    let name = gtk4::Entry::builder()
+        .text(label.unwrap_or_default())
+        .placeholder_text("A")
+        .width_chars(8)
+        .build();
+    let coord = |v: f64| {
+        let spin = gtk4::SpinButton::with_range(-1e6, 1e6, 1.0);
+        spin.set_digits(1);
+        spin.set_value(v);
+        spin
+    };
+    let (xs, ys) = (coord(pos.x), coord(pos.y));
+    let apply = gtk4::Button::with_label("Áp dụng");
+    apply.add_css_class("suggested-action");
+
+    let grid = gtk4::Grid::builder()
+        .row_spacing(6)
+        .column_spacing(8)
+        .margin_top(6)
+        .margin_bottom(6)
+        .margin_start(6)
+        .margin_end(6)
+        .build();
+    for (row, (text, widget)) in [
+        ("Tên điểm", name.upcast_ref::<gtk4::Widget>()),
+        ("X", xs.upcast_ref()),
+        ("Y", ys.upcast_ref()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let label = gtk4::Label::builder().label(text).xalign(0.0).build();
+        grid.attach(&label, 0, row as i32, 1, 1);
+        grid.attach(widget, 1, row as i32, 1, 1);
+    }
+    grid.attach(&apply, 0, 3, 2, 1);
+
+    let popover = gtk4::Popover::builder()
+        .child(&grid)
+        .pointing_to(&gdk::Rectangle::new(x as i32, y as i32, 1, 1))
+        .build();
+    popover.set_parent(canvas);
+    popover.connect_closed(|p| {
+        let p = p.clone();
+        glib::idle_add_local_once(move || p.unparent());
+    });
+
+    let commit = glib::clone!(
+        #[weak]
+        canvas,
+        #[weak]
+        popover,
+        #[weak]
+        name,
+        #[weak]
+        xs,
+        #[weak]
+        ys,
+        move || {
+            let label = name.text().trim().to_string();
+            let flags = canvas.engine_mut().update_figure_point(
+                key,
+                id,
+                (!label.is_empty()).then_some(label),
+                Vector2::new(xs.value(), ys.value()),
+            );
+            canvas.emit_handle_widget_flags(flags);
+            popover.popdown();
+        }
+    );
+    let c = commit.clone();
+    apply.connect_clicked(move |_| c());
+    let c = commit.clone();
+    name.connect_activate(move |_| c());
+    for spin in [&xs, &ys] {
+        let c = commit.clone();
+        spin.connect_activate(move |_| c());
+    }
+
+    popover.popup();
+    name.grab_focus();
+    name.select_region(0, -1);
 }
 
 pub(crate) fn handle_key_controller_key_released(

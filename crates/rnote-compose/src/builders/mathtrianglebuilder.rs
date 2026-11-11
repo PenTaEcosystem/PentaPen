@@ -1,7 +1,7 @@
 // MathTriangleBuilder: Interactive builder for triangles with classical centers
 use super::buildable::{Buildable, BuilderCreator, BuilderProgress};
 use crate::eventresult::EventPropagation;
-use crate::geometry::{MathFigure, TriangleCenterType};
+use crate::geometry::MathFigure;
 use crate::penevent::{KeyboardKey, PenEvent, PenState};
 use crate::penpath::Element;
 use crate::style::{Composer, indicators};
@@ -16,18 +16,25 @@ use std::time::Instant;
 pub struct MathTriangleBuilder {
     start: Vector2,
     current: Vector2,
+    labels: [String; 3],
 }
 
 impl BuilderCreator for MathTriangleBuilder {
     fn start(element: Element, _now: Instant) -> Self {
-        Self {
-            start: element.pos,
-            current: element.pos,
-        }
+        Self::start_with_labels(element, ["A", "B", "C"].map(String::from))
     }
 }
 
 impl MathTriangleBuilder {
+    /// Start a triangle whose vertices get the given names.
+    pub fn start_with_labels(element: Element, labels: [String; 3]) -> Self {
+        Self {
+            start: element.pos,
+            current: element.pos,
+            labels,
+        }
+    }
+
     fn build_math_figure(&self) -> MathFigure {
         let min_x = self.start.x.min(self.current.x);
         let max_x = self.start.x.max(self.current.x);
@@ -56,14 +63,10 @@ impl MathTriangleBuilder {
             )
         };
 
+        // The special centers are added by the shaper when "show centers" is on
         let mut fig = MathFigure::new();
-        let (pa, pb, pc, _, _, _) = fig.build_triangle(a, b, c, Some(["A", "B", "C"]));
-        // Add 4 special centers (Centroid G, Circumcenter O, Orthocenter H, Incenter I)
-        fig.add_triangle_center(pa, pb, pc, TriangleCenterType::Centroid, true);
-        fig.add_triangle_center(pa, pb, pc, TriangleCenterType::Circumcenter, true);
-        fig.add_triangle_center(pa, pb, pc, TriangleCenterType::Orthocenter, true);
-        fig.add_triangle_center(pa, pb, pc, TriangleCenterType::Incenter, true);
-
+        let [la, lb, lc] = &self.labels;
+        fig.build_triangle(a, b, c, Some([la.as_str(), lb.as_str(), lc.as_str()]));
         fig
     }
 }

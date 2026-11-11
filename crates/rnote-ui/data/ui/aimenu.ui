@@ -7,7 +7,7 @@
     <child>
       <object class="GtkMenuButton" id="menubutton">
         <property name="icon_name">ai-sparkle-symbolic</property>
-        <property name="tooltip_text" translatable="yes">AI Geometry Assistant &amp; MCP Tools</property>
+        <property name="tooltip_text" translatable="yes">Trợ lý hình học AI (phím A)</property>
       </object>
     </child>
     <object class="GtkPopover" id="popover">
@@ -47,7 +47,7 @@
                   </child>
                   <child>
                     <object class="GtkLabel">
-                      <property name="label" translatable="yes">PentaPen MCP Geometric Solver &amp; Agent</property>
+                      <property name="label" translatable="yes">Mô tả hình cần vẽ, AI dựng chính xác lên bảng</property>
                       <property name="halign">start</property>
                       <style>
                         <class name="dim-label" />
@@ -60,89 +60,65 @@
             </object>
           </child>
 
-          <!-- Provider & Model Selection Row -->
+          <!-- API settings: any OpenAI-compatible endpoint -->
           <child>
-            <object class="GtkBox">
-              <property name="spacing">6</property>
+            <object class="GtkExpander">
+              <property name="label">⚙ Cấu hình API</property>
               <child>
-                <object class="GtkDropDown" id="provider_dropdown">
-                  <property name="tooltip-text" translatable="yes">Chọn nhà cung cấp AI</property>
-                  <property name="model">
-                    <object class="GtkStringList">
-                      <items>
-                        <item translatable="false">Ollama (Local AI)</item>
-                        <item translatable="false">Google Gemini</item>
-                        <item translatable="false">OpenAI</item>
-                        <item translatable="false">PentaPen Offline</item>
-                      </items>
+                <object class="GtkGrid">
+                  <property name="row-spacing">6</property>
+                  <property name="column-spacing">6</property>
+                  <property name="margin-top">6</property>
+                  <child>
+                    <object class="GtkLabel">
+                      <property name="label">Base URL</property>
+                      <property name="xalign">0</property>
+                      <layout><property name="column">0</property><property name="row">0</property></layout>
                     </object>
-                  </property>
-                </object>
-              </child>
-              <child>
-                <object class="GtkDropDown" id="model_dropdown">
-                  <property name="hexpand">true</property>
-                  <property name="tooltip-text" translatable="yes">Chọn mô hình AI (Model)</property>
-                  <property name="model">
-                    <object class="GtkStringList">
-                      <items>
-                        <item translatable="false">qwen3.5:fast</item>
-                        <item translatable="false">qwen3.5:4b</item>
-                        <item translatable="false">qwen2.5:1.5b</item>
-                      </items>
+                  </child>
+                  <child>
+                    <object class="GtkEntry" id="base_url_entry">
+                      <property name="hexpand">true</property>
+                      <property name="placeholder-text">https://api.openai.com/v1</property>
+                      <layout><property name="column">1</property><property name="row">0</property></layout>
                     </object>
-                  </property>
-                </object>
-              </child>
-              <child>
-                <object class="GtkButton" id="refresh_models_button">
-                  <property name="label">🔄 Quét</property>
-                  <property name="tooltip-text" translatable="yes">Quét lại danh sách mô hình đã tải</property>
-                  <style>
-                    <class name="flat" />
-                  </style>
-                </object>
-              </child>
-            </object>
-          </child>
-
-          <!-- Download / Pull Model Row -->
-          <child>
-            <object class="GtkBox">
-              <property name="spacing">6</property>
-              <child>
-                <object class="GtkEntry" id="pull_model_entry">
-                  <property name="hexpand">true</property>
-                  <property name="placeholder-text" translatable="yes">Tải model Ollama (vd: qwen2.5:3b, llama3.2)...</property>
-                </object>
-              </child>
-              <child>
-                <object class="GtkButton" id="pull_model_button">
-                  <property name="label">⬇️ Tải</property>
-                  <property name="tooltip-text" translatable="yes">Tải mô hình mới từ thư viện Ollama</property>
-                  <style>
-                    <class name="suggested-action" />
-                  </style>
-                </object>
-              </child>
-            </object>
-          </child>
-
-          <!-- API Key Row -->
-          <child>
-            <object class="GtkBox">
-              <property name="spacing">6</property>
-              <child>
-                <object class="GtkPasswordEntry" id="api_key_entry">
-                  <property name="placeholder-text" translatable="yes">API Key (Gemini/OpenAI/MCP)...</property>
-                  <property name="show-peek-icon">true</property>
-                  <property name="hexpand">true</property>
-                </object>
-              </child>
-              <child>
-                <object class="GtkButton" id="save_key_button">
-                  <property name="label" translatable="yes">Lưu</property>
-                  <property name="tooltip-text" translatable="yes">Lưu API Key</property>
+                  </child>
+                  <child>
+                    <object class="GtkLabel">
+                      <property name="label">Model</property>
+                      <property name="xalign">0</property>
+                      <layout><property name="column">0</property><property name="row">1</property></layout>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkEntry" id="model_entry">
+                      <property name="placeholder-text">gpt-4o-mini</property>
+                      <layout><property name="column">1</property><property name="row">1</property></layout>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkLabel">
+                      <property name="label">API key</property>
+                      <property name="xalign">0</property>
+                      <layout><property name="column">0</property><property name="row">2</property></layout>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkPasswordEntry" id="api_key_entry">
+                      <property name="show-peek-icon">true</property>
+                      <layout><property name="column">1</property><property name="row">2</property></layout>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkButton" id="save_key_button">
+                      <property name="label">Lưu</property>
+                      <property name="halign">end</property>
+                      <style>
+                        <class name="suggested-action" />
+                      </style>
+                      <layout><property name="column">1</property><property name="row">3</property></layout>
+                    </object>
+                  </child>
                 </object>
               </child>
             </object>
@@ -326,7 +302,7 @@
               <child>
                 <object class="GtkEntry" id="prompt_entry">
                   <property name="hexpand">true</property>
-                  <property name="placeholder-text" translatable="yes">Nhập: 'tạo điểm A(100, 200)', 'vẽ tam giác ABC', 'đường cao AH'...</property>
+                  <property name="placeholder-text" translatable="yes">Vd: vẽ tam giác ABC vuông tại A, kẻ đường cao AH</property>
                 </object>
               </child>
               <child>

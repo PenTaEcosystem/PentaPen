@@ -447,6 +447,77 @@ impl MathFigure {
         Some((d_id, line_id))
     }
 
+    /// Add points where this figure's segments and circles cross foreign segments and circles
+    /// (other shapes on the page), so a crossing is visible and can be selected and named.
+    /// A segment passing within `TANGENT_TOL` of a circle counts as touching it.
+    pub fn add_intersections_with(
+        &mut self,
+        segments: &[(Vector2, Vector2)],
+        circles: &[(Vector2, f64)],
+    ) -> Vec<PointId> {
+        const TANGENT_TOL: f64 = 1.5;
+        let on_segment = |x: Vector2, a: Vector2, b: Vector2| {
+            let d = b - a;
+            let len_sq = d.length_squared();
+            len_sq > 1e-12 && (-0.01..=1.01).contains(&((x - a).dot(d) / len_sq))
+        };
+        let segment_circle = |a: Vector2, b: Vector2, c: Vector2, r: f64| -> Vec<Vector2> {
+            let mut pts = line_circle_intersection(a, b, c, r);
+            if pts.is_empty() {
+                let d = b - a;
+                let t = (c - a).dot(d) / d.length_squared().max(1e-12);
+                let foot = a + d * t;
+                if ((foot - c).length() - r).abs() <= TANGENT_TOL {
+                    pts.push(foot);
+                }
+            }
+            pts.retain(|&x| on_segment(x, a, b));
+            pts
+        };
+
+        let own_segments: Vec<(Vector2, Vector2)> = self
+            .lines
+            .values()
+            .filter_map(|l| Some((self.points.get(&l.p1)?.pos, self.points.get(&l.p2)?.pos)))
+            .collect();
+        let own_circles: Vec<(Vector2, f64)> = self
+            .circles
+            .values()
+            .filter_map(|c| Some((self.points.get(&c.center)?.pos, c.radius)))
+            .collect();
+
+        let mut hits = Vec::new();
+        for &(p1, p2) in &own_segments {
+            for &(q1, q2) in segments {
+                if let Some(x) = line_line_intersection(p1, p2, q1, q2)
+                    && on_segment(x, p1, p2)
+                    && on_segment(x, q1, q2)
+                {
+                    hits.push(x);
+                }
+            }
+            for &(c, r) in circles {
+                hits.extend(segment_circle(p1, p2, c, r));
+            }
+        }
+        for &(c, r) in &own_circles {
+            for &(q1, q2) in segments {
+                hits.extend(segment_circle(q1, q2, c, r));
+            }
+            for &(c2, r2) in circles {
+                hits.extend(circle_circle_intersection(c, r, c2, r2));
+            }
+        }
+
+        let mut new_points = Vec::new();
+        for x in hits {
+            if self.find_point_near(x, 0.5).is_none() {
+                new_points.push(self.add_point(x, None));
+            }
+        }
+        new_points
+    }
+
     /// Automatically compute all intersections (line-line, line-circle, circle-circle)
     /// and add new labeled intersection points to the figure.
     pub fn auto_detect_intersections(&mut self) -> Vec<PointId> {

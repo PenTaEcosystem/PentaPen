@@ -21,7 +21,7 @@ use rnote_compose::builders::{
 };
 use rnote_compose::eventresult::{EventPropagation, EventResult};
 use rnote_compose::ext::Vector2Ext;
-use rnote_compose::geometry::{CircleId, MathFigure, PointId};
+use rnote_compose::geometry::{CircleId, LineStyle, MathFigure, PointId};
 use rnote_compose::penevent::{KeyboardKey, ModifierKey, PenEvent, PenProgress};
 use rnote_compose::penpath::Element;
 use rnote_compose::shapes::Shapeable;
@@ -56,6 +56,8 @@ pub enum HandleKind {
 pub struct SelectedShapeData {
     pub key: StrokeKey,
     pub point: Option<PointId>,
+    /// Where the shape was last clicked: D restyles the line or circle there.
+    pub click: Vector2,
 }
 
 #[derive(Debug)]
@@ -160,6 +162,7 @@ impl PenBehaviour for Shaper {
                             point: figure_of(engine_view.store, hit_key).and_then(|fig| {
                                 nearest_figure_point(fig, element.pos, hit_threshold)
                             }),
+                            click: element.pos,
                         },
                         active_handle: None,
                         last_drag_pos: Some(element.pos),
@@ -264,6 +267,7 @@ impl PenBehaviour for Shaper {
                             HandleKind::FigurePoint(id) => Some(id),
                             _ => None,
                         };
+                        selected.click = element.pos;
                         widget_flags.redraw = true;
                         *active_handle = Some(h);
                         *last_drag_pos = Some(element.pos);
@@ -281,6 +285,7 @@ impl PenBehaviour for Shaper {
                     {
                         // Switched selection to another shape
                         selected.key = other_key;
+                        selected.click = element.pos;
                         selected.point = figure_of(engine_view.store, other_key)
                             .and_then(|fig| nearest_figure_point(fig, element.pos, hit_threshold));
                         *active_handle = None;
@@ -386,7 +391,6 @@ impl PenBehaviour for Shaper {
                 && !modifier_keys.contains(&ModifierKey::KeyboardAlt) =>
             {
                 let key = selected.key;
-                let rename_target = selected.point;
 
                 match keyboard_key {
                     KeyboardKey::Escape => {
@@ -400,17 +404,30 @@ impl PenBehaviour for Shaper {
                             progress: PenProgress::Finished,
                         }
                     }
-                    // Renaming wins over tool shortcuts while a point is targeted, so L/R/S/P are valid names.
-                    KeyboardKey::Unicode(c) if c.is_alphanumeric() && rename_target.is_some() => {
+                    // Delete the selected shape; undo brings it back.
+                    KeyboardKey::Delete | KeyboardKey::BackSpace => {
+                        engine_view.store.set_trashed(key, true);
+                        self.state = ShaperState::Idle;
+                        self.hovered_stroke = None;
+                        self.active_snap = None;
+                        widget_flags |= engine_view.store.record(Instant::now());
+                        widget_flags.store_modified = true;
+                        widget_flags.redraw = true;
+                        EventResult {
+                            handled: true,
+                            propagate: EventPropagation::Stop,
+                            progress: PenProgress::Finished,
+                        }
+                    }
+                    // D: solid <-> dashed for the clicked line or circle
+                    KeyboardKey::Unicode('d' | 'D') => {
+                        let click = selected.click;
                         if let Some(Stroke::ShapeStroke(ss)) = engine_view.store.get_stroke_mut(key)
                             && let Shape::MathFigure(fig) = &mut ss.shape
-                            && let Some(pt) = rename_target.and_then(|id| fig.points.get_mut(&id))
                         {
-                            pt.label = Some(c.to_uppercase().to_string());
+                            toggle_dashed(fig, click, hit_threshold);
                         }
-                        // One key renames once; the next letter is a normal shortcut again.
-                        selected.point = None;
-                        engine_view.store.update_geometry_for_stroke(key);
+                        engine_view.store.update_geometry_for_strokes(&[key]);
                         engine_view.store.regenerate_rendering_for_stroke(
                             key,
                             engine_view.camera.viewport(),
@@ -562,6 +579,8 @@ impl PenBehaviour for Shaper {
                                     .math_auto_intersections
                                 {
                                     fig.auto_detect_intersections();
+                                    let (segments, circles) = page_geometry(engine_view.store);
+                                    fig.add_intersections_with(&segments, &circles);
                                 }
                                 if engine_view
                                     .config
@@ -1077,6 +1096,45 @@ fn figure_of(store: &crate::store::StrokeStore, key: StrokeKey) -> Option<&MathF
     }
 }
 
+/// Flip solid <-> dashed for the line or circle nearest to `pos` (within `threshold`),
+/// or for all lines of the figure when the click was not on one (e.g. on a point).
+fn toggle_dashed(fig: &mut MathFigure, pos: Vector2, threshold: f64) {
+    let flip = |s: LineStyle| {
+        if s == LineStyle::Solid {
+            LineStyle::Dashed
+        } else {
+            LineStyle::Solid
+        }
+    };
+    let at = |id: PointId| fig.points.get(&id).map(|p| p.pos);
+    let line = fig
+        .lines
+        .values()
+        .filter_map(|l| Some((l.id, dist_to_segment(pos, at(l.p1)?, at(l.p2)?))))
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    let circle = fig
+        .circles
+        .values()
+        .filter_map(|c| Some((c.id, ((pos - at(c.center)?).length() - c.radius).abs())))
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    match (line, circle) {
+        (Some((l, dl)), c) if dl <= threshold && c.is_none_or(|(_, dc)| dl <= dc) => {
+            let line = fig.lines.get_mut(&l).unwrap();
+            line.style = flip(line.style);
+        }
+        (_, Some((c, dc))) if dc <= threshold => {
+            let circle = fig.circles.get_mut(&c).unwrap();
+            circle.style = flip(circle.style);
+        }
+        _ => {
+            let style = fig.lines.values().next().map(|l| flip(l.style));
+            for l in fig.lines.values_mut() {
+                l.style = style.unwrap_or(LineStyle::Dashed);
+            }
+        }
+    }
+}
+
 /// The figure point nearest to `pos`, if within `threshold`.
 fn nearest_figure_point(fig: &MathFigure, pos: Vector2, threshold: f64) -> Option<PointId> {
     fig.points
@@ -1090,7 +1148,8 @@ fn nearest_figure_point(fig: &MathFigure, pos: Vector2, threshold: f64) -> Optio
 fn shortcut_builder_type(key: KeyboardKey) -> Option<ShapeBuilderType> {
     match key {
         KeyboardKey::Unicode('l' | 'L') => Some(ShapeBuilderType::MathLine),
-        KeyboardKey::Unicode('r' | 'R') => Some(ShapeBuilderType::MathCircle),
+        KeyboardKey::Unicode('r' | 'R' | 'c' | 'C') => Some(ShapeBuilderType::MathCircle),
+        KeyboardKey::Unicode('t' | 'T') => Some(ShapeBuilderType::MathTriangle),
         KeyboardKey::Unicode('s' | 'S') => Some(ShapeBuilderType::Rectangle),
         KeyboardKey::Unicode('p' | 'P') => Some(ShapeBuilderType::MathPoint),
         _ => None,
@@ -1333,12 +1392,28 @@ fn new_builder(
         ShapeBuilderType::CubBez => Box::new(CubBezBuilder::start(element, now)),
         ShapeBuilderType::Polyline => Box::new(PolylineBuilder::start(element, now)),
         ShapeBuilderType::Polygon => Box::new(PolygonBuilder::start(element, now)),
-        ShapeBuilderType::MathTriangle => Box::new(MathTriangleBuilder::start(element, now)),
-        ShapeBuilderType::MathCircle => Box::new(MathCircleBuilder::start_with_labels(
-            element,
-            shaper_config.math_center_label.clone(),
-            free_labels(store, 1).remove(0),
-        )),
+        ShapeBuilderType::MathTriangle => {
+            let mut free = free_labels(store, 3).into_iter();
+            let labels = [(); 3].map(|_| free.next().unwrap_or_default());
+            Box::new(MathTriangleBuilder::start_with_labels(element, labels))
+        }
+        ShapeBuilderType::MathCircle => {
+            // Center: the configured name unless a point already has it. Through point: next free name.
+            let configured = &shaper_config.math_center_label;
+            let mut free = free_labels(store, 3)
+                .into_iter()
+                .filter(|l| l != configured);
+            let center = if label_in_use(store, configured) {
+                free.next().unwrap_or_default()
+            } else {
+                configured.clone()
+            };
+            Box::new(MathCircleBuilder::start_with_labels(
+                element,
+                center,
+                free.next().unwrap_or_default(),
+            ))
+        }
         ShapeBuilderType::MathPoint => Box::new(MathPointBuilder::start_with_label(
             element,
             shaper_config.math_center_label.clone(),
@@ -1353,6 +1428,52 @@ fn new_builder(
             ))
         }
     }
+}
+
+/// Segments and circles of all shapes on the page, for crossing points with a new figure.
+fn page_geometry(
+    store: &crate::store::StrokeStore,
+) -> (Vec<(Vector2, Vector2)>, Vec<(Vector2, f64)>) {
+    let mut segments = Vec::new();
+    let mut circles = Vec::new();
+    for key in store.stroke_keys_unordered() {
+        let Some(Stroke::ShapeStroke(ss)) = store.get_stroke_ref(key) else {
+            continue;
+        };
+        match &ss.shape {
+            Shape::Line(line) => segments.push((line.start, line.end)),
+            // Only round ellipses: an ellipse treated as a circle would produce phantom crossings
+            Shape::Ellipse(e)
+                if (e.radii.x - e.radii.y).abs() <= 0.01 * e.radii.x.max(e.radii.y) =>
+            {
+                circles.push((e.affine.translation, e.radii.x))
+            }
+            Shape::MathFigure(fig) => {
+                segments.extend(fig.lines.values().filter_map(|l| {
+                    Some((fig.points.get(&l.p1)?.pos, fig.points.get(&l.p2)?.pos))
+                }));
+                circles.extend(
+                    fig.circles
+                        .values()
+                        .filter_map(|c| Some((fig.points.get(&c.center)?.pos, c.radius))),
+                );
+            }
+            _ => {}
+        }
+    }
+    (segments, circles)
+}
+
+fn label_in_use(store: &crate::store::StrokeStore, label: &str) -> bool {
+    store
+        .stroke_keys_unordered()
+        .into_iter()
+        .filter_map(|key| figure_of(store, key))
+        .any(|fig| {
+            fig.points
+                .values()
+                .any(|p| p.label.as_deref() == Some(label))
+        })
 }
 
 /// The first `n` single-letter labels not yet used by any figure point (O is kept for centers).

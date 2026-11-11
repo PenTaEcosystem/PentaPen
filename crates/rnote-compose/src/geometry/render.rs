@@ -125,8 +125,8 @@ pub fn draw_math_figure(
         let dot = kurbo::Circle::new(kurbo::Point::new(pt.pos.x, pt.pos.y), POINT_DOT_RADIUS);
         cx.fill(dot, &stroke_brush);
 
-        // Highlight center point (e.g. O) with a distinct concentric ring
-        if pt.label.as_deref() == Some("O") {
+        // A ring marks centers (O) and unnamed points, which are mostly intersections
+        if pt.label.is_none() || pt.label.as_deref() == Some("O") {
             let ring = kurbo::Circle::new(
                 kurbo::Point::new(pt.pos.x, pt.pos.y),
                 POINT_DOT_RADIUS * 2.2,

@@ -67,6 +67,71 @@
         </child>
         <child>
           <object class="GtkShortcutsGroup">
+            <property name="title">Hình học (nhấp đúp vào điểm để sửa tên/toạ độ)</property>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Điểm</property>
+                <property name="accelerator">p</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Đoạn thẳng</property>
+                <property name="accelerator">l</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Đường tròn</property>
+                <property name="accelerator">c</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Tam giác</property>
+                <property name="accelerator">t</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Hình chữ nhật</property>
+                <property name="accelerator">s</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Chấm tâm cho AI</property>
+                <property name="accelerator">o</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Mở trợ lý AI</property>
+                <property name="accelerator">a</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Nét liền / nét đứt cho đường đang chọn</property>
+                <property name="accelerator">d</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Xoá hình đang chọn</property>
+                <property name="accelerator">Delete</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title">Bỏ chọn / huỷ hình đang vẽ</property>
+                <property name="accelerator">Escape</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkShortcutsGroup">
             <property name="title" translatable="yes">Navigation</property>
             <child>
               <object class="GtkShortcutsShortcut">

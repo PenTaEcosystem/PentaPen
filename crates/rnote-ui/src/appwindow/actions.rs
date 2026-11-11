@@ -366,13 +366,23 @@ impl RnAppWindow {
             }
         ));
 
-        // Tab actions
-        let action_shape_line = gio::SimpleAction::new("shape-line", None);
-        self.add_action(&action_shape_line);
-        action_shape_line.connect_activate(clone!(
+        // Geometry tool shortcuts (canvas keys P/L/C/T/S): switch to the shaper with that builder
+        let action_math_tool =
+            gio::SimpleAction::new("math-tool", Some(&String::static_variant_type()));
+        self.add_action(&action_math_tool);
+        action_math_tool.connect_activate(clone!(
             #[weak(rename_to=appwindow)]
             self,
-            move |_, _| {
+            move |_, param| {
+                use rnote_compose::builders::ShapeBuilderType;
+                let builder_type = match param.and_then(|p| p.get::<String>()).as_deref() {
+                    Some("point") => ShapeBuilderType::MathPoint,
+                    Some("line") => ShapeBuilderType::MathLine,
+                    Some("circle") => ShapeBuilderType::MathCircle,
+                    Some("triangle") => ShapeBuilderType::MathTriangle,
+                    Some("rectangle") => ShapeBuilderType::Rectangle,
+                    _ => return,
+                };
                 appwindow.set_pen_style(PenStyle::Shaper);
                 appwindow
                     .overlays()
@@ -384,90 +394,25 @@ impl RnAppWindow {
                     .write()
                     .pens_config
                     .shaper_config
-                    .builder_type = rnote_compose::builders::ShapeBuilderType::MathLine;
+                    .builder_type = builder_type;
                 if let Some(canvas) = appwindow.active_tab_canvas() {
-                    let mut flags = rnote_engine::WidgetFlags::default();
-                    flags.refresh_ui = true;
+                    let flags = rnote_engine::WidgetFlags {
+                        refresh_ui: true,
+                        ..Default::default()
+                    };
                     appwindow.handle_widget_flags(flags, &canvas);
                 }
             }
         ));
 
-        let action_shape_circle = gio::SimpleAction::new("shape-circle", None);
-        self.add_action(&action_shape_circle);
-        action_shape_circle.connect_activate(clone!(
+        // Canvas key A: open the AI assistant with the prompt focused
+        let action_ai_assistant = gio::SimpleAction::new("ai-assistant", None);
+        self.add_action(&action_ai_assistant);
+        action_ai_assistant.connect_activate(clone!(
             #[weak(rename_to=appwindow)]
             self,
             move |_, _| {
-                appwindow.set_pen_style(PenStyle::Shaper);
-                appwindow
-                    .overlays()
-                    .penpicker()
-                    .shaper_toggle()
-                    .set_active(true);
-                appwindow
-                    .engine_config()
-                    .write()
-                    .pens_config
-                    .shaper_config
-                    .builder_type = rnote_compose::builders::ShapeBuilderType::MathCircle;
-                if let Some(canvas) = appwindow.active_tab_canvas() {
-                    let mut flags = rnote_engine::WidgetFlags::default();
-                    flags.refresh_ui = true;
-                    appwindow.handle_widget_flags(flags, &canvas);
-                }
-            }
-        ));
-
-        let action_shape_square = gio::SimpleAction::new("shape-square", None);
-        self.add_action(&action_shape_square);
-        action_shape_square.connect_activate(clone!(
-            #[weak(rename_to=appwindow)]
-            self,
-            move |_, _| {
-                appwindow.set_pen_style(PenStyle::Shaper);
-                appwindow
-                    .overlays()
-                    .penpicker()
-                    .shaper_toggle()
-                    .set_active(true);
-                appwindow
-                    .engine_config()
-                    .write()
-                    .pens_config
-                    .shaper_config
-                    .builder_type = rnote_compose::builders::ShapeBuilderType::Rectangle;
-                if let Some(canvas) = appwindow.active_tab_canvas() {
-                    let mut flags = rnote_engine::WidgetFlags::default();
-                    flags.refresh_ui = true;
-                    appwindow.handle_widget_flags(flags, &canvas);
-                }
-            }
-        ));
-
-        let action_shape_point = gio::SimpleAction::new("shape-point", None);
-        self.add_action(&action_shape_point);
-        action_shape_point.connect_activate(clone!(
-            #[weak(rename_to=appwindow)]
-            self,
-            move |_, _| {
-                appwindow.set_pen_style(PenStyle::Shaper);
-                appwindow
-                    .overlays()
-                    .penpicker()
-                    .shaper_toggle()
-                    .set_active(true);
-                appwindow
-                    .engine_config()
-                    .write()
-                    .pens_config
-                    .shaper_config
-                    .builder_type = rnote_compose::builders::ShapeBuilderType::MathPoint;
-                if let Some(canvas) = appwindow.active_tab_canvas() {
-                    let mut flags = rnote_engine::WidgetFlags::default();
-                    flags.refresh_ui = true;
-                    appwindow.handle_widget_flags(flags, &canvas);
-                }
+                appwindow.main_header().aimenu().open_menu();
             }
         ));
 

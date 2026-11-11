@@ -267,3 +267,35 @@ fn test_auto_detect_triangles_and_centers() {
         "Incenter I should be detected"
     );
 }
+
+#[test]
+fn test_intersections_with_other_shapes() {
+    // Horizontal segment through a foreign circle (center (50,0), r 20) and across a foreign segment
+    let mut fig = MathFigure::new();
+    let a = fig.add_point(Vector2::new(0.0, 0.0), Some("A".into()));
+    let b = fig.add_point(Vector2::new(100.0, 0.0), Some("B".into()));
+    fig.add_segment(a, b);
+    let added = fig.add_intersections_with(
+        &[(Vector2::new(10.0, -10.0), Vector2::new(10.0, 10.0))],
+        &[(Vector2::new(50.0, 0.0), 20.0)],
+    );
+    assert_eq!(added.len(), 3); // x=10 crossing, x=30 and x=70 on the circle
+    for x in [10.0, 30.0, 70.0] {
+        assert!(fig.find_point_near(Vector2::new(x, 0.0), 1e-6).is_some());
+    }
+
+    // A segment that misses the circle by 1px still counts as touching it
+    let mut near = MathFigure::new();
+    let p = near.add_point(Vector2::new(0.0, 21.0), None);
+    let q = near.add_point(Vector2::new(100.0, 21.0), None);
+    near.add_segment(p, q);
+    let touch = near.add_intersections_with(&[], &[(Vector2::new(50.0, 0.0), 20.0)]);
+    assert_eq!(touch.len(), 1);
+
+    // A foreign segment that stops short does not count
+    let none = fig.add_intersections_with(
+        &[(Vector2::new(200.0, -10.0), Vector2::new(200.0, 10.0))],
+        &[],
+    );
+    assert!(none.is_empty());
+}

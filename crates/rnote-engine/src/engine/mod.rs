@@ -948,4 +948,149 @@ impl Engine {
         widget_flags.redraw = true;
         widget_flags
     }
+
+    fn math_figures(&self) -> impl Iterator<Item = (StrokeKey, &rnote_compose::MathFigure)> {
+        self.store
+            .stroke_keys_unordered()
+            .into_iter()
+            .filter_map(|key| match self.store.get_stroke_ref(key) {
+                Some(crate::strokes::Stroke::ShapeStroke(ss)) => match &ss.shape {
+                    rnote_compose::Shape::MathFigure(fig) => Some((key, fig)),
+                    _ => None,
+                },
+                _ => None,
+            })
+    }
+
+    /// The geometry point nearest to `pos` (document coordinates) within `tolerance`:
+    /// its stroke, id, label and position.
+    pub fn figure_point_at(
+        &self,
+        pos: Vector2,
+        tolerance: f64,
+    ) -> Option<(
+        StrokeKey,
+        rnote_compose::geometry::PointId,
+        Option<String>,
+        Vector2,
+    )> {
+        self.math_figures()
+            .flat_map(|(key, fig)| {
+                fig.points
+                    .values()
+                    .map(move |p| (key, p.id, p.label.clone(), p.pos))
+            })
+            .map(|hit| ((hit.3 - pos).length(), hit))
+            .filter(|(d, _)| *d <= tolerance)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, hit)| hit)
+    }
+
+    /// Rename and move one geometry point; dependent elements follow through the constraint solver.
+    pub fn update_figure_point(
+        &mut self,
+        key: StrokeKey,
+        id: rnote_compose::geometry::PointId,
+        label: Option<String>,
+        pos: Vector2,
+    ) -> WidgetFlags {
+        let Some(crate::strokes::Stroke::ShapeStroke(ss)) = self.store.get_stroke_mut(key) else {
+            return WidgetFlags::default();
+        };
+        let rnote_compose::Shape::MathFigure(fig) = &mut ss.shape else {
+            return WidgetFlags::default();
+        };
+        fig.drag_point(id, pos);
+        if let Some(p) = fig.points.get_mut(&id) {
+            p.label = label;
+        }
+        self.store.update_geometry_for_strokes(&[key]);
+        self.store.regenerate_rendering_for_stroke(
+            key,
+            self.camera.viewport(),
+            self.camera.image_scale(),
+        );
+        let mut widget_flags = self.record(Instant::now());
+        widget_flags.store_modified = true;
+        widget_flags.redraw = true;
+        widget_flags
+    }
+
+    /// Whether a geometry line joins the points named `a` and `b` (any figure on the page);
+    /// with `style`, those lines also get that style.
+    pub fn restyle_figure_lines(
+        &mut self,
+        a: &str,
+        b: &str,
+        style: Option<rnote_compose::geometry::LineStyle>,
+    ) -> (bool, WidgetFlags) {
+        let norm = |s: &str| s.trim().to_uppercase();
+        let wanted = [norm(a), norm(b)];
+        let mut found = false;
+        let mut changed = Vec::new();
+        for key in self.store.stroke_keys_unordered() {
+            let Some(crate::strokes::Stroke::ShapeStroke(ss)) = self.store.get_stroke_mut(key)
+            else {
+                continue;
+            };
+            let rnote_compose::Shape::MathFigure(fig) = &mut ss.shape else {
+                continue;
+            };
+            let name = |id| {
+                fig.points
+                    .get(&id)
+                    .and_then(|p| p.label.as_deref())
+                    .map(norm)
+            };
+            let hits: Vec<_> = fig
+                .lines
+                .values()
+                .filter(|l| {
+                    let ends = [name(l.p1), name(l.p2)];
+                    ends == [Some(wanted[0].clone()), Some(wanted[1].clone())]
+                        || ends == [Some(wanted[1].clone()), Some(wanted[0].clone())]
+                })
+                .map(|l| l.id)
+                .collect();
+            found |= !hits.is_empty();
+            if let Some(style) = style
+                && !hits.is_empty()
+            {
+                for id in hits {
+                    fig.lines.get_mut(&id).unwrap().style = style;
+                }
+                changed.push(key);
+            }
+        }
+        let mut widget_flags = WidgetFlags::default();
+        if !changed.is_empty() {
+            self.store.update_geometry_for_strokes(&changed);
+            for &key in &changed {
+                self.store.regenerate_rendering_for_stroke(
+                    key,
+                    self.camera.viewport(),
+                    self.camera.image_scale(),
+                );
+            }
+            widget_flags = self.record(Instant::now());
+            widget_flags.store_modified = true;
+            widget_flags.redraw = true;
+        }
+        (found, widget_flags)
+    }
+
+    /// Named geometry points on the page, e.g. as context for the AI assistant.
+    pub fn named_figure_points(&self) -> Vec<(String, Vector2)> {
+        let mut points: Vec<(String, Vector2)> = self
+            .math_figures()
+            .flat_map(|(_, fig)| {
+                fig.points
+                    .values()
+                    .filter_map(|p| Some((p.label.clone()?, p.pos)))
+            })
+            .collect();
+        points.sort_by(|a, b| a.0.cmp(&b.0));
+        points.dedup_by(|a, b| a.0 == b.0);
+        points
+    }
 }

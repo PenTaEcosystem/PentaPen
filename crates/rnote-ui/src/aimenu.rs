@@ -127,7 +127,8 @@ Reply with ONLY one JSON object (no markdown, no prose outside it):
  "rename": [{"from": "A", "to": "M"}],
  "remove_points": ["D"],
  "remove_lines": [{"p1": "A", "p2": "B"}],
- "remove_circles": ["O"]}
+ "remove_circles": ["O"],
+ "remove_all": false}
 Rules:
 - Coordinates are canvas pixels, x to the right, y DOWNWARDS. Place the figure around the given anchor, typical size 150-300 px.
 - Give coordinates only for free points (e.g. the vertices of a triangle). Every derived point must come from a construction so it is exact:
@@ -140,6 +141,7 @@ Rules:
   - Keep `"replace": false` when adding constructions (altitude, median, bisector, circumcircle, incircle, tangents, etc.), adding lines/circles/points, restyling lines/circles, moving specific points (by listing them in `"points"` with new canvas coordinates), resizing an existing circle (by listing its `"center"` and new `"radius"` in `"circles"`), renaming points (`"rename"`), or removing elements (`"remove_points"`, `"remove_lines"`, `"remove_circles"`).
   - Set `"replace": true` ONLY when the user asks to replace or redraw the entire selected shape into a completely different shape (e.g. "đổi thành hình vuông", "vẽ lại thành tam giác đều").
 - Respect requested lengths and angles. If the user gives lengths in cm, 1 cm = 40 px.
+- Deleting (xoá, bỏ, gỡ): list what to delete in "remove_points" (a point with its lines and circles), "remove_lines" (by end point names) and "remove_circles" (by center name); draw nothing else. Without a selected shape this works on every figure on the canvas. "remove_all": true deletes ALL shapes on the canvas (xoá hết, xoá tất cả); use it only when the user asks to delete everything.
 - "style" (lines and circles) is "solid", "dashed", "dotted" or "dashdot"; use dashed for auxiliary lines.
 - To change an existing line (e.g. "make AB dashed"), list it in "lines" with the new style: lines between existing points are restyled, not redrawn.
 - Intersections are added automatically.
@@ -166,6 +168,8 @@ struct GeometryJson {
     remove_points: Vec<String>,
     remove_lines: Vec<JsonLineRef>,
     remove_circles: Vec<String>,
+    /// Delete every shape on the page
+    remove_all: bool,
     axes: Option<JsonAxes>,
     graphs: Vec<JsonGraph>,
     tables: Vec<JsonGraph>,
@@ -296,6 +300,68 @@ fn build_figure(geom: &GeometryJson, existing: &[(String, Vector2)]) -> (MathFig
     (fig, warnings)
 }
 
+/// Whether the reply asks to delete anything.
+fn wants_removal(geom: &GeometryJson) -> bool {
+    geom.remove_all
+        || !geom.remove_points.is_empty()
+        || !geom.remove_lines.is_empty()
+        || !geom.remove_circles.is_empty()
+}
+
+/// Delete the points (with their lines and circles), lines (by end point names) and circles
+/// (by center name) the reply lists. Returns whether anything was deleted.
+fn remove_elements(fig: &mut MathFigure, geom: &GeometryJson) -> bool {
+    fn key(name: &str) -> String {
+        name.trim().to_uppercase()
+    }
+    let id_of = |fig: &MathFigure, name: &str| {
+        fig.points
+            .values()
+            .find(|p| p.label.as_deref().map(key) == Some(key(name)))
+            .map(|p| p.id)
+    };
+    let before = (fig.points.len(), fig.lines.len(), fig.circles.len());
+    for rm in &geom.remove_lines {
+        if let (Some(p1), Some(p2)) = (id_of(fig, &rm.p1), id_of(fig, &rm.p2)) {
+            fig.lines
+                .retain(|_, l| !((l.p1 == p1 && l.p2 == p2) || (l.p1 == p2 && l.p2 == p1)));
+        }
+    }
+    for rm in &geom.remove_circles {
+        if let Some(c) = id_of(fig, rm) {
+            fig.circles.retain(|_, x| x.center != c);
+        }
+    }
+    for rm in &geom.remove_points {
+        if let Some(pid) = id_of(fig, rm) {
+            fig.points.remove(&pid);
+            fig.lines.retain(|_, l| l.p1 != pid && l.p2 != pid);
+            fig.circles
+                .retain(|_, c| c.center != pid && c.through_point != Some(pid));
+            fig.right_angles
+                .retain(|m| m.vertex != pid && m.arm1 != pid && m.arm2 != pid);
+        }
+    }
+    // Unnamed helper points (intersections, line ends) left without any line or circle go too
+    let used: std::collections::HashSet<PointId> = fig
+        .lines
+        .values()
+        .flat_map(|l| [l.p1, l.p2])
+        .chain(fig.circles.values().flat_map(|c| [Some(c.center), c.through_point]).flatten())
+        .collect();
+    if (fig.lines.len(), fig.circles.len()) != (before.1, before.2) || fig.points.len() != before.0
+    {
+        fig.points
+            .retain(|id, p| p.label.is_some() || used.contains(id));
+        fig.right_angles.retain(|m| {
+            [m.vertex, m.arm1, m.arm2]
+                .iter()
+                .all(|id| fig.points.contains_key(id))
+        });
+    }
+    (fig.points.len(), fig.lines.len(), fig.circles.len()) != before
+}
+
 /// Apply `GeometryJson` operations directly onto an existing (or new) `MathFigure`.
 /// This allows AI to edit a user's clicked/selected figure in-place (moving points, resizing circles,
 /// adding constructions/lines/circles, changing styles, renaming, or removing elements).
@@ -407,6 +473,9 @@ fn apply_geometry_to_figure(
         *fig = MathFigure::new();
     }
 
+    // 1. Removals
+    remove_elements(fig, geom);
+
     let mut ids = HashMap::new();
     for (&id, pt) in &fig.points {
         if let Some(ref lbl) = pt.label {
@@ -414,31 +483,6 @@ fn apply_geometry_to_figure(
         }
     }
     let mut warnings = Vec::new();
-
-    // 1. Removals
-    for rm_line in &geom.remove_lines {
-        let k1 = key(&rm_line.p1);
-        let k2 = key(&rm_line.p2);
-        if let (Some(&p1), Some(&p2)) = (ids.get(&k1), ids.get(&k2)) {
-            fig.lines
-                .retain(|_, l| !((l.p1 == p1 && l.p2 == p2) || (l.p1 == p2 && l.p2 == p1)));
-        }
-    }
-    for rm_circ in &geom.remove_circles {
-        let kc = key(rm_circ);
-        if let Some(&c_id) = ids.get(&kc) {
-            fig.circles.retain(|_, c| c.center != c_id);
-        }
-    }
-    for rm_pt in &geom.remove_points {
-        let kp = key(rm_pt);
-        if let Some(pid) = ids.remove(&kp) {
-            fig.points.remove(&pid);
-            fig.lines.retain(|_, l| l.p1 != pid && l.p2 != pid);
-            fig.circles
-                .retain(|_, c| c.center != pid && c.through_point != Some(pid));
-        }
-    }
 
     // 2. Renames
     for rn in &geom.rename {
@@ -939,22 +983,12 @@ impl RnAiMenu {
             .map(|(name, p)| ((p - pos).length(), name))
             .filter(|(d, _)| *d <= reach)
             .min_by(|a, b| a.0.total_cmp(&b.0));
-        let name = match nearest {
-            Some((_, name)) => name,
-            None => {
-                // Tapped on empty board: leave a named point there, so the mark stays visible
-                let label = canvas.engine_ref().suggest_point_label();
-                let mut fig = MathFigure::new();
-                fig.add_point(pos, Some(label.clone()));
-                let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
-                if let Some(appwindow) = self.appwindow() {
-                    appwindow.handle_widget_flags(flags, &canvas);
-                }
-                label
-            }
+        // Nothing is added to the board: the prompt gets the point's name or its position
+        let text = match nearest {
+            Some((_, name)) => format!("điểm {name} "),
+            None => format!("tại toạ độ ({:.0}, {:.0}) ", pos.x, pos.y),
         };
         self.flash_marker(&canvas, pos);
-        let text = format!("điểm {name} ");
         imp.prompt_view.buffer().insert_at_cursor(&text);
         self.open_menu();
     }
@@ -1027,10 +1061,10 @@ impl RnAiMenu {
         });
     }
 
-    /// Wait for one press on the board (see `point_picked`): the ring follows the finger
-    /// until it is let go. Gives up after a while without any press.
+    /// Wait for one press on the board (see `point_picked`), with a red cursor: the ring follows
+    /// the finger until it is let go. Gives up after 5 s without a press, picking nothing.
     fn start_point_pick(&self) {
-        const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+        const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
         let Some(appwindow) = self.appwindow() else {
             return;
         };
@@ -1043,7 +1077,7 @@ impl RnAiMenu {
         canvas.set_picking_ai_point(true);
         self.close_menu();
         appwindow.overlays().dispatch_toast_text(
-            "Nhấn vào bảng, kéo đến vị trí mong muốn rồi thả tay (Esc để huỷ).",
+            "Bấm vào vị trí bất kỳ trên bảng trong 5 giây (giữ và kéo để chỉnh, Esc để huỷ).",
             Some(WAIT),
         );
         let this = self.clone();
@@ -1053,7 +1087,7 @@ impl RnAiMenu {
             }
             canvas.set_picking_ai_point(false);
             this.hide_pick_marker();
-            this.append_ai_message("Hết thời gian, chưa chọn điểm nào.");
+            this.append_ai_message("Hết 5 giây, chưa chọn điểm nào.");
             this.open_menu();
         });
     }
@@ -1497,7 +1531,7 @@ impl RnAiMenu {
         }
 
         // Check if the user has clicked/selected a shape on the canvas to edit in-place
-        let (selected_target, anchor, existing) = {
+        let (selected_target, anchor, existing, (lines, circles)) = {
             let engine = canvas.engine_ref();
             let sel = engine.selected_shape_key().and_then(|key| {
                 let (origin, ctx) = engine.selected_shape_ai_context(key)?;
@@ -1509,7 +1543,12 @@ impl RnAiMenu {
                 .map(|(_, origin, _, _)| *origin)
                 .or_else(|| engine.last_center_point().map(|(p, _)| p))
                 .unwrap_or_else(|| engine.camera.viewport_center());
-            (sel, anchor, engine.named_figure_points())
+            (
+                sel,
+                anchor,
+                engine.named_figure_points(),
+                engine.named_figure_lines_and_circles(),
+            )
         };
         let existing_desc = if existing.is_empty() {
             "none".to_string()
@@ -1519,6 +1558,15 @@ impl RnAiMenu {
                 .map(|(n, p)| format!("{n}({:.0}, {:.0})", p.x, p.y))
                 .collect::<Vec<_>>()
                 .join(", ")
+        };
+        let existing_desc = if lines.is_empty() && circles.is_empty() {
+            existing_desc
+        } else {
+            format!(
+                "{existing_desc}. Existing lines: {}. Existing circles: {}",
+                if lines.is_empty() { "none".to_string() } else { lines.join(", ") },
+                if circles.is_empty() { "none".to_string() } else { circles.join(", ") },
+            )
         };
         let user = if let Some((_, _, ref shape_ctx, _)) = selected_target {
             format!(
@@ -1548,6 +1596,21 @@ impl RnAiMenu {
             };
 
             let explanation = geom.explanation.clone().unwrap_or_default();
+            // "Delete everything": the page is cleared first, a selection no longer matters
+            let mut removed = 0;
+            let selected_target = if geom.remove_all {
+                if let Some(appwindow) = this.appwindow()
+                    && let Some(canvas) = appwindow.active_tab_canvas()
+                {
+                    this.finish_drawing();
+                    let (n, flags) = canvas.engine_mut().remove_all_shapes();
+                    appwindow.handle_widget_flags(flags, &canvas);
+                    removed += n;
+                }
+                None
+            } else {
+                selected_target
+            };
             // Everything the reply adds, replayed stroke by stroke at the end
             let mut drawn = Vec::new();
             let (drew_graph, graph_warnings) = this.draw_graphs(&mut geom, anchor, &mut drawn);
@@ -1559,13 +1622,22 @@ impl RnAiMenu {
                 if let Some(appwindow) = this.appwindow()
                     && let Some(canvas) = appwindow.active_tab_canvas()
                 {
-                    let flags = canvas
-                        .engine_mut()
-                        .update_shape_with_figure(sel_key, target_fig);
-                    appwindow.handle_widget_flags(flags, &canvas);
-                    this.update_center_status();
-                    drawn.push(sel_key);
-                    this.play_drawing(drawn, Some(before));
+                    this.finish_drawing();
+                    if target_fig.points.is_empty() {
+                        // Everything of it was deleted
+                        let flags = canvas.engine_mut().remove_stroke(sel_key);
+                        appwindow.handle_widget_flags(flags, &canvas);
+                        this.update_center_status();
+                        this.play_drawing(drawn, None);
+                    } else {
+                        let flags = canvas
+                            .engine_mut()
+                            .update_shape_with_figure(sel_key, target_fig);
+                        appwindow.handle_widget_flags(flags, &canvas);
+                        this.update_center_status();
+                        drawn.push(sel_key);
+                        this.play_drawing(drawn, Some(before));
+                    }
                 }
                 let mut msg = if explanation.is_empty() {
                     "Đã cập nhật hình đang chọn.".to_string()
@@ -1597,6 +1669,19 @@ impl RnAiMenu {
                 .map(|n| n.trim().to_uppercase())
                 .collect();
             let mut restyled = 0;
+            // Deleting with nothing selected: on every figure on the page
+            if !geom.remove_all
+                && wants_removal(&geom)
+                && let Some(appwindow) = this.appwindow()
+                && let Some(canvas) = appwindow.active_tab_canvas()
+            {
+                this.finish_drawing();
+                let (n, flags) = canvas
+                    .engine_mut()
+                    .edit_all_figures(|fig| remove_elements(fig, &geom));
+                appwindow.handle_widget_flags(flags, &canvas);
+                removed += n;
+            }
             if let Some(appwindow) = this.appwindow()
                 && let Some(canvas) = appwindow.active_tab_canvas()
             {
@@ -1618,6 +1703,17 @@ impl RnAiMenu {
                 });
             }
             let (fig, warnings) = build_figure(&geom, &existing);
+            if fig.points.is_empty() && !drew_graph && wants_removal(&geom) {
+                let msg = if removed == 0 {
+                    "Không tìm thấy phần cần xoá trên bảng (kiểm tra lại tên điểm)."
+                } else if explanation.is_empty() {
+                    "Đã xoá. Bấm Hoàn tác (Ctrl+Z) nếu muốn lấy lại."
+                } else {
+                    &explanation
+                };
+                this.append_ai_message(&glib::markup_escape_text(msg));
+                return;
+            }
             if fig.points.is_empty() && restyled > 0 {
                 this.append_ai_message(&glib::markup_escape_text(&explanation));
                 return;
@@ -1666,6 +1762,39 @@ impl RnAiMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deletes_what_the_reply_lists() {
+        let mut fig = MathFigure::new();
+        let a = fig.add_point(Vector2::new(0.0, 0.0), Some("A".into()));
+        let b = fig.add_point(Vector2::new(100.0, 0.0), Some("B".into()));
+        let c = fig.add_point(Vector2::new(0.0, 100.0), Some("C".into()));
+        let o = fig.add_point(Vector2::new(50.0, 50.0), Some("O".into()));
+        fig.add_segment(a, b);
+        fig.add_segment(b, c);
+        fig.add_segment(c, a);
+        fig.add_circle_through(o, a);
+
+        let geom = parse_geometry(
+            r#"{"remove_circles": ["o"], "remove_lines": [{"p1": "B", "p2": "A"}]}"#,
+        )
+        .unwrap();
+        assert!(wants_removal(&geom));
+        assert!(remove_elements(&mut fig, &geom));
+        assert!(fig.circles.is_empty());
+        assert_eq!(fig.lines.len(), 2);
+        // Named points stay unless asked for
+        assert_eq!(fig.points.len(), 4);
+
+        // Removing C takes its lines along; asking again changes nothing
+        let geom = parse_geometry(r#"{"remove_points": ["C"]}"#).unwrap();
+        assert!(remove_elements(&mut fig, &geom));
+        assert!(fig.lines.is_empty() && fig.find_point_by_label("C").is_none());
+        assert!(!remove_elements(&mut fig, &geom));
+
+        let all = parse_geometry(r#"{"explanation": "Đã xoá", "remove_all": true}"#).unwrap();
+        assert!(all.remove_all && wants_removal(&all));
+    }
 
     #[test]
     fn builds_constructions_from_reply() {

@@ -170,6 +170,7 @@ rnote_ui_gresources_icons_files = files(
     'icons/scalable/actions/cursor-crosshair-small.svg',
     'icons/scalable/actions/cursor-dot-large.svg',
     'icons/scalable/actions/cursor-dot-medium.svg',
+    'icons/scalable/actions/cursor-pick.svg',
     'icons/scalable/actions/cursor-dot-small.svg',
     'icons/scalable/actions/cursor-invisible.svg',
     'icons/scalable/actions/cursor-teardrop-n-large.svg',

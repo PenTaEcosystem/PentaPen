@@ -1263,6 +1263,113 @@ impl Engine {
         (found, widget_flags)
     }
 
+    /// Change every geometry figure on the page with `edit` (returns whether it changed the
+    /// figure), e.g. to delete what the AI was asked to delete. Figures left without any point
+    /// are removed. One undo step. Returns how many figures changed.
+    pub fn edit_all_figures(
+        &mut self,
+        mut edit: impl FnMut(&mut rnote_compose::MathFigure) -> bool,
+    ) -> (usize, WidgetFlags) {
+        let mut changed = Vec::new();
+        for key in self.store.stroke_keys_as_rendered() {
+            let Some(crate::strokes::Stroke::ShapeStroke(ss)) = self.store.get_stroke_ref(key)
+            else {
+                continue;
+            };
+            let rnote_compose::Shape::MathFigure(fig) = &ss.shape else {
+                continue;
+            };
+            let mut fig = fig.clone();
+            if !edit(&mut fig) {
+                continue;
+            }
+            if fig.points.is_empty() {
+                self.store.set_trashed(key, true);
+            } else if let Some(crate::strokes::Stroke::ShapeStroke(ss)) =
+                self.store.get_stroke_mut(key)
+            {
+                ss.shape = rnote_compose::Shape::MathFigure(fig);
+                self.store.update_geometry_for_strokes(&[key]);
+                self.store.regenerate_rendering_for_stroke(
+                    key,
+                    self.camera.viewport(),
+                    self.camera.image_scale(),
+                );
+            }
+            changed.push(key);
+        }
+        let mut widget_flags = WidgetFlags::default();
+        if !changed.is_empty() {
+            widget_flags = self.record(Instant::now());
+            widget_flags.store_modified = true;
+            widget_flags.redraw = true;
+        }
+        (changed.len(), widget_flags)
+    }
+
+    /// Remove one stroke (undo brings it back).
+    pub fn remove_stroke(&mut self, key: StrokeKey) -> WidgetFlags {
+        if self.store.get_stroke_ref(key).is_none() {
+            return WidgetFlags::default();
+        }
+        self.penholder.clear_shaper_selection();
+        self.store.set_trashed(key, true);
+        let mut widget_flags = self.record(Instant::now());
+        widget_flags.store_modified = true;
+        widget_flags.redraw = true;
+        widget_flags
+    }
+
+    /// Remove all shapes on the page (figures, axes, graphs), e.g. when the AI is asked to
+    /// clear the drawing. Handwriting and text stay. One undo step. Returns how many were removed.
+    pub fn remove_all_shapes(&mut self) -> (usize, WidgetFlags) {
+        let keys: Vec<StrokeKey> = self
+            .store
+            .stroke_keys_as_rendered()
+            .into_iter()
+            .filter(|&k| {
+                matches!(
+                    self.store.get_stroke_ref(k),
+                    Some(crate::strokes::Stroke::ShapeStroke(_))
+                )
+            })
+            .collect();
+        for &k in &keys {
+            self.store.set_trashed(k, true);
+        }
+        let mut widget_flags = WidgetFlags::default();
+        if !keys.is_empty() {
+            widget_flags = self.record(Instant::now());
+            widget_flags.store_modified = true;
+            widget_flags.redraw = true;
+        }
+        (keys.len(), widget_flags)
+    }
+
+    /// Lines ("AB") and circles ("(O)") between named points on the page, as context for the AI.
+    pub fn named_figure_lines_and_circles(&self) -> (Vec<String>, Vec<String>) {
+        let mut lines = Vec::new();
+        let mut circles = Vec::new();
+        for (_, fig) in self.math_figures() {
+            let name = |id| fig.points.get(&id).and_then(|p| p.label.clone());
+            for l in fig.lines.values().filter(|l| l.visible) {
+                if let (Some(a), Some(b)) = (name(l.p1), name(l.p2)) {
+                    lines.push(format!("{a}{b}"));
+                }
+            }
+            for c in fig.circles.values().filter(|c| c.visible) {
+                if let Some(o) = name(c.center) {
+                    circles.push(format!("({o})"));
+                }
+            }
+        }
+        lines.sort();
+        lines.dedup();
+        circles.sort();
+        circles.dedup();
+        (lines, circles)
+    }
+
     /// Named geometry points on the page, e.g. as context for the AI assistant.
     pub fn named_figure_points(&self) -> Vec<(String, Vector2)> {
         let mut points: Vec<(String, Vector2)> = self

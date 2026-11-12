@@ -713,6 +713,9 @@ impl RnAppWindow {
             #[weak(rename_to=appwindow)]
             self,
             move |_, _| {
+                if appwindow.forward_to_text_field("text.undo") {
+                    return;
+                }
                 let Some(canvas) = appwindow.active_tab_canvas() else {
                     return;
                 };
@@ -726,6 +729,9 @@ impl RnAppWindow {
             #[weak(rename_to=appwindow)]
             self,
             move |_, _| {
+                if appwindow.forward_to_text_field("text.redo") {
+                    return;
+                }
                 let Some(canvas) = appwindow.active_tab_canvas() else {
                     return;
                 };
@@ -1150,6 +1156,9 @@ impl RnAppWindow {
 
         // Clipboard copy
         action_clipboard_copy.connect_activate(clone!(#[weak(rename_to=appwindow)] self, move |_, _| {
+            if appwindow.forward_to_text_field("clipboard.copy") {
+                return;
+            }
             appwindow.overlays().aimenu().finish_drawing();
             glib::spawn_future_local(clone!(#[weak] appwindow, async move {
                 let Some(canvas) = appwindow.active_tab_canvas()
@@ -1183,6 +1192,9 @@ impl RnAppWindow {
 
         // Clipboard cut
         action_clipboard_cut.connect_activate(clone!(#[weak(rename_to=appwindow)] self, move |_, _| {
+            if appwindow.forward_to_text_field("clipboard.cut") {
+                return;
+            }
             appwindow.overlays().aimenu().finish_drawing();
             glib::spawn_future_local(clone!(#[weak] appwindow, async move {
                 let Some(canvas) = appwindow.active_tab_canvas()
@@ -1218,6 +1230,9 @@ impl RnAppWindow {
             #[weak(rename_to=appwindow)]
             self,
             move |_, _| {
+                if appwindow.forward_to_text_field("clipboard.paste") {
+                    return;
+                }
                 let Some(wrapper) = appwindow.active_tab_wrapper() else {
                     return;
                 };
@@ -1324,6 +1339,22 @@ impl RnAppWindow {
         if config::PROFILE.to_lowercase().as_str() == "devel" {
             app.set_accels_for_action("win.visual-debug", &["<Ctrl><Shift>v"]);
         }
+    }
+
+    /// Ctrl+C/X/V/Z/Shift+Z are window shortcuts, so they would act on the board even while
+    /// typing in the AI chat or another text field. Hand them to that field instead.
+    /// Returns whether a focused text field took the action.
+    fn forward_to_text_field(&self, action: &str) -> bool {
+        let Some(focus) = gtk4::prelude::GtkWindowExt::focus(self) else {
+            return false;
+        };
+        if !(focus.is::<gtk4::Text>() || focus.is::<gtk4::TextView>()) {
+            return false;
+        }
+        if let Err(e) = focus.activate_action(action, None) {
+            debug!("Text field could not run `{action}`, Err: {e:?}");
+        }
+        true
     }
 
     fn clipboard_paste(&self, target_pos: Option<Vector2>) {

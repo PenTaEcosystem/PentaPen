@@ -1040,8 +1040,36 @@ impl RnCanvas {
             return;
         };
         self.imp().drawing_cursor_enabled.set(drawing_cursor);
+        // Picking a point keeps its red cursor
+        if self.is_picking_ai_point() || self.is_picking_center() {
+            return;
+        }
 
         if drawing_cursor {
+            if self.imp().show_drawing_cursor.get() {
+                self.set_cursor(Some(&*self.imp().drawing_cursor.borrow()));
+            } else {
+                self.set_cursor(Some(&*self.imp().invisible_cursor.borrow()));
+            }
+        } else {
+            self.set_cursor(Some(&*self.imp().regular_cursor.borrow()));
+        }
+    }
+
+    /// A red crosshair while a point is being picked, the usual cursor otherwise.
+    fn update_pick_cursor(&self) {
+        if self.is_picking_ai_point() || self.is_picking_center() {
+            let cursor = gdk::Cursor::from_texture(
+                &gdk::Texture::from_resource(
+                    (String::from(config::APP_IDPATH) + "icons/scalable/actions/cursor-pick.svg")
+                        .as_str(),
+                ),
+                32,
+                32,
+                gdk::Cursor::from_name("crosshair", None).as_ref(),
+            );
+            self.set_cursor(Some(&cursor));
+        } else if self.imp().drawing_cursor_enabled.get() {
             if self.imp().show_drawing_cursor.get() {
                 self.set_cursor(Some(&*self.imp().drawing_cursor.borrow()));
             } else {
@@ -1062,20 +1090,12 @@ impl RnCanvas {
 
     pub(crate) fn set_picking_ai_point(&self, picking: bool) {
         self.imp().picking_ai_point.set(picking);
-        if picking {
-            self.set_cursor_from_name(Some("crosshair"));
-        } else {
-            self.set_cursor(Some(&*self.imp().regular_cursor.borrow()));
-        }
+        self.update_pick_cursor();
     }
 
     pub(crate) fn set_picking_center(&self, picking: bool) {
         self.imp().picking_center.set(picking);
-        if picking {
-            self.set_cursor_from_name(Some("crosshair"));
-        } else {
-            self.set_cursor(Some(&*self.imp().regular_cursor.borrow()));
-        }
+        self.update_pick_cursor();
     }
 
     /// The document title for display. Can be used to get a string as the basename of the existing / a new save file.

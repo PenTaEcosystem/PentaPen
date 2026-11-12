@@ -88,6 +88,15 @@ pub(crate) fn setup_env() -> anyhow::Result<()> {
         if std::env::var_os("GDK_DEBUG").is_none() {
             unsafe { std::env::set_var("GDK_DEBUG", "dcomp") };
         }
+        // GTK's Windows IME input module keeps a window message filter for an input context
+        // after the context is freed, and the next IME message then reads freed memory
+        // (access violation 0xc0000005 in libgtk-4-1.dll, inside gtkimcontextime.c). It takes
+        // the app down when switching pens, after typing in the AI chat, or after closing a
+        // dialog with a text field. Use GTK's own simple input context instead: typed text and
+        // tools such as UniKey, which send finished characters, keep working.
+        if std::env::var_os("GTK_IM_MODULE").is_none() {
+            unsafe { std::env::set_var("GTK_IM_MODULE", "gtk-im-context-simple") };
+        }
         // On Windows, pangocairo renders glyphs through cairo's win32 font backend, which goes to DirectWrite
         // and Direct2D.
         // On Windows that path is broken: pango logs "All font fallbacks failed" for every layout and rendering

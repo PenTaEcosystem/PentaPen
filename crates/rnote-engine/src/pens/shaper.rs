@@ -73,6 +73,8 @@ enum ShaperState {
         pick: Option<SelectedShapeData>,
         start: Vector2,
         moved: bool,
+        /// The figure that was selected when drawing started: what is drawn joins it
+        into: Option<StrokeKey>,
     },
     Manipulating {
         selected: SelectedShapeData,
@@ -176,6 +178,15 @@ impl Shaper {
         engine_view: &mut EngineViewMut,
         snap_radius: f64,
     ) {
+        // Drawing while a figure is selected adds to that figure
+        let into = match &self.state {
+            ShaperState::Manipulating { selected, .. }
+                if figure_of(engine_view.store, selected.key).is_some() =>
+            {
+                Some(selected.key)
+            }
+            _ => None,
+        };
         self.state = match action {
             PressAction::Drag(handle, selected) => ShaperState::Manipulating {
                 selected,
@@ -217,6 +228,7 @@ impl Shaper {
                     pick,
                     start: element.pos,
                     moved: false,
+                    into,
                 }
             }
         };
@@ -729,6 +741,7 @@ impl PenBehaviour for Shaper {
                     pick,
                     start,
                     moved,
+                    into,
                 },
                 mut event,
             ) => {
@@ -899,6 +912,28 @@ impl PenBehaviour for Shaper {
                                     fig.auto_detect_triangles_and_centers(true);
                                 }
                             }
+                            if let (Some(target), Shape::MathFigure(new_fig)) = (*into, &shape)
+                                && let Some(Stroke::ShapeStroke(ss)) =
+                                    engine_view.store.get_stroke_mut(target)
+                                && let Shape::MathFigure(fig) = &mut ss.shape
+                            {
+                                fig.absorb(new_fig);
+                                if engine_view
+                                    .config
+                                    .pens_config
+                                    .shaper_config
+                                    .math_auto_intersections
+                                {
+                                    fig.auto_detect_intersections();
+                                }
+                                engine_view.store.update_geometry_for_strokes(&[target]);
+                                engine_view.store.regenerate_rendering_for_stroke(
+                                    target,
+                                    engine_view.camera.viewport(),
+                                    engine_view.camera.image_scale(),
+                                );
+                                continue;
+                            }
                             let key = engine_view.store.insert_stroke(
                                 Stroke::ShapeStroke(ShapeStroke::new(shape, style.clone())),
                                 None,
@@ -911,8 +946,18 @@ impl PenBehaviour for Shaper {
                             );
                         }
 
-                        // No auto-selection after drawing: the next press on any point draws from it.
-                        self.state = match clicked_pick {
+                        // A figure drawn into stays selected, so drawing can go on.
+                        // Otherwise no auto-selection after drawing: the next press on any point draws from it.
+                        let keep = into
+                            .filter(|_| shapes_emitted && clicked_pick.is_none())
+                            .filter(|&k| figure_of(engine_view.store, k).is_some())
+                            .map(|key| SelectedShapeData {
+                                key,
+                                point: None,
+                                segment: None,
+                                click: *start,
+                            });
+                        self.state = match clicked_pick.or(keep) {
                             Some(selected) => ShaperState::Manipulating {
                                 selected,
                                 active_handle: None,

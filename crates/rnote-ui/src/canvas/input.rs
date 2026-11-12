@@ -295,16 +295,8 @@ pub(crate) fn handle_pointer_controller_event(
                 PenState::Proximity => {
                     canvas.enable_drawing_cursor(false);
 
-                    if canvas.is_picking_ai_point() {
-                        if let Some(appwindow) = canvas
-                            .root()
-                            .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
-                        {
-                            appwindow.overlays().aimenu().move_pick_marker(element.pos);
-                        }
-                        return (glib::Propagation::Stop, pen_state, stylus_active);
-                    }
-                    if canvas.is_picking_center() {
+                    // Hovering while picking only shows the red cursor
+                    if canvas.is_picking_center() || canvas.is_picking_ai_point() {
                         return (glib::Propagation::Stop, pen_state, stylus_active);
                     }
 

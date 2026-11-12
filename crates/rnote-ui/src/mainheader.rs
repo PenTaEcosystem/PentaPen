@@ -1,7 +1,5 @@
 // Imports
-use crate::{
-    aimenu::RnAiMenu, appmenu::RnAppMenu, appwindow::RnAppWindow, canvasmenu::RnCanvasMenu,
-};
+use crate::{appmenu::RnAppMenu, appwindow::RnAppWindow, canvasmenu::RnCanvasMenu};
 use gtk4::{
     CompositeTemplate, Label, ToggleButton, Widget, glib, prelude::*, subclass::prelude::*,
 };
@@ -22,8 +20,6 @@ mod imp {
         pub(crate) left_sidebar_reveal_toggle: TemplateChild<ToggleButton>,
         #[template_child]
         pub(crate) right_sidebar_reveal_toggle: TemplateChild<ToggleButton>,
-        #[template_child]
-        pub(crate) aimenu: TemplateChild<RnAiMenu>,
         #[template_child]
         pub(crate) canvasmenu: TemplateChild<RnCanvasMenu>,
         #[template_child]
@@ -97,11 +93,6 @@ impl RnMainHeader {
         self.imp().right_sidebar_reveal_toggle.get()
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn aimenu(&self) -> RnAiMenu {
-        self.imp().aimenu.get()
-    }
-
     pub(crate) fn canvasmenu(&self) -> RnCanvasMenu {
         self.imp().canvasmenu.get()
     }
@@ -113,7 +104,6 @@ impl RnMainHeader {
     pub(crate) fn init(&self, appwindow: &RnAppWindow) {
         let imp = self.imp();
 
-        imp.aimenu.get().init(appwindow);
         imp.canvasmenu.get().init(appwindow);
         imp.appmenu.get().init(appwindow);
     }

@@ -17,6 +17,7 @@ pub mod drawable;
 pub mod engine;
 pub mod ext;
 pub mod fileformats;
+pub mod graph;
 pub mod image;
 pub mod pens;
 pub mod selectioncollision;

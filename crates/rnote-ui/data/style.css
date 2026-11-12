@@ -247,3 +247,12 @@ toast {
     margin-left: 72px;
     margin-right: 72px;
 }
+
+/* Floating AI assistant bubble */
+.ai_bubble > button {
+  min-width: 56px;
+  min-height: 56px;
+  font-weight: bold;
+  font-size: 1.15em;
+  box-shadow: 0 3px 10px alpha(black, 0.35);
+}

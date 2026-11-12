@@ -375,14 +375,23 @@ impl RnAppWindow {
             self,
             move |_, param| {
                 use rnote_compose::builders::ShapeBuilderType;
-                let builder_type = match param.and_then(|p| p.get::<String>()).as_deref() {
+                let param = param.and_then(|p| p.get::<String>());
+                let builder_type = match param.as_deref() {
                     Some("point") => ShapeBuilderType::MathPoint,
-                    Some("line") => ShapeBuilderType::MathLine,
+                    Some("line" | "line-nopoints") => ShapeBuilderType::MathLine,
                     Some("circle") => ShapeBuilderType::MathCircle,
                     Some("triangle") => ShapeBuilderType::MathTriangle,
                     Some("rectangle") => ShapeBuilderType::Rectangle,
+                    Some("coords") => ShapeBuilderType::CoordSystem2D,
                     _ => return,
                 };
+                // Only the "line without points" tool hides points; every other tool shows them
+                appwindow
+                    .engine_config()
+                    .write()
+                    .pens_config
+                    .shaper_config
+                    .math_show_points = param.as_deref() != Some("line-nopoints");
                 appwindow.set_pen_style(PenStyle::Shaper);
                 appwindow
                     .overlays()
@@ -412,7 +421,7 @@ impl RnAppWindow {
             #[weak(rename_to=appwindow)]
             self,
             move |_, _| {
-                appwindow.main_header().aimenu().open_menu();
+                appwindow.overlays().aimenu().open_menu();
             }
         ));
 

@@ -7,7 +7,15 @@
     <child>
       <object class="GtkMenuButton" id="menubutton">
         <property name="label">AI</property>
-        <property name="tooltip_text" translatable="yes">Trợ lý hình học AI (phím A)</property>
+        <property name="direction">up</property>
+        <property name="width-request">56</property>
+        <property name="height-request">56</property>
+        <property name="tooltip_text" translatable="yes">Trợ lý hình học AI (phím A) · kéo để di chuyển</property>
+        <style>
+          <class name="circular" />
+          <class name="suggested-action" />
+          <class name="ai_bubble" />
+        </style>
       </object>
     </child>
     <object class="GtkPopover" id="popover">
@@ -205,23 +213,53 @@
             </object>
           </child>
 
-          <!-- Prompt Entry & Send Button -->
+          <!-- Prompt (multi-line: Enter sends, Shift+Enter breaks the line), point picker, send -->
           <child>
             <object class="GtkBox">
               <property name="spacing">6</property>
               <child>
-                <object class="GtkEntry" id="prompt_entry">
+                <object class="GtkScrolledWindow">
                   <property name="hexpand">true</property>
-                  <property name="placeholder-text" translatable="yes">Nhập lệnh vẽ hoặc sửa hình đang chọn (vd: kẻ đường cao AH, đổi nét đứt...)</property>
+                  <property name="hscrollbar-policy">never</property>
+                  <property name="propagate-natural-height">true</property>
+                  <property name="min-content-height">40</property>
+                  <property name="max-content-height">140</property>
+                  <style>
+                    <class name="card" />
+                  </style>
+                  <property name="child">
+                    <object class="GtkTextView" id="prompt_view">
+                      <property name="wrap-mode">word-char</property>
+                      <property name="accepts-tab">false</property>
+                      <property name="top-margin">8</property>
+                      <property name="bottom-margin">8</property>
+                      <property name="left-margin">8</property>
+                      <property name="right-margin">8</property>
+                      <property name="tooltip-text" translatable="yes">Enter: gửi · Shift+Enter: xuống dòng</property>
+                    </object>
+                  </property>
                 </object>
               </child>
               <child>
-                <object class="GtkButton" id="send_button">
-                  <property name="label">Gửi</property>
-                  <property name="tooltip-text" translatable="yes">Gửi lệnh cho AI</property>
-                  <style>
-                    <class name="suggested-action" />
-                  </style>
+                <object class="GtkBox">
+                  <property name="orientation">vertical</property>
+                  <property name="spacing">4</property>
+                  <property name="valign">end</property>
+                  <child>
+                    <object class="GtkButton" id="pick_point_button">
+                      <property name="icon-name">dot-symbolic</property>
+                      <property name="tooltip-text" translatable="yes">Chọn điểm trên bảng: bấm rồi chạm vào một điểm trong 3 giây, tên điểm được chèn vào lệnh</property>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkButton" id="send_button">
+                      <property name="label">Gửi</property>
+                      <property name="tooltip-text" translatable="yes">Gửi lệnh cho AI</property>
+                      <style>
+                        <class name="suggested-action" />
+                      </style>
+                    </object>
+                  </child>
                 </object>
               </child>
             </object>

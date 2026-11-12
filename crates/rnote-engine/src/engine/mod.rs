@@ -949,6 +949,85 @@ impl Engine {
         widget_flags
     }
 
+    /// Insert strokes as one undo step, in the shaper's current color and width.
+    fn insert_generated_strokes(
+        &mut self,
+        make: impl FnOnce(&rnote_compose::Style, rnote_compose::Color) -> Vec<crate::strokes::Stroke>,
+    ) -> WidgetFlags {
+        let style = self
+            .config
+            .read()
+            .pens_config
+            .shaper_config
+            .gen_style_for_current_options();
+        let color = style.stroke_color().unwrap_or(rnote_compose::Color::BLACK);
+        let keys: Vec<StrokeKey> = make(&style, color)
+            .into_iter()
+            .map(|stroke| self.store.insert_stroke(stroke, None))
+            .collect();
+        self.store.update_geometry_for_strokes(&keys);
+        for key in keys {
+            self.store.regenerate_rendering_for_stroke(
+                key,
+                self.camera.viewport(),
+                self.camera.image_scale(),
+            );
+        }
+        let mut widget_flags = self.document.resize_autoexpand(&self.store, &self.camera)
+            | self.record(std::time::Instant::now());
+        widget_flags.store_modified = true;
+        widget_flags.redraw = true;
+        widget_flags
+    }
+
+    /// Draw y = f(x) with axes. `center` is where the middle of the window lands on the canvas.
+    pub fn insert_function_graph(
+        &mut self,
+        f: &crate::graph::Function,
+        center: Vector2,
+        unit: f64,
+        x_range: (f64, f64),
+        y_range: (f64, f64),
+    ) -> WidgetFlags {
+        let mid = Vector2::new(0.5 * (x_range.0 + x_range.1), 0.5 * (y_range.0 + y_range.1));
+        let frame = crate::graph::GraphFrame {
+            origin: center - Vector2::new(mid.x * unit, -mid.y * unit),
+            unit,
+            x_range,
+            y_range,
+        };
+        self.insert_generated_strokes(|style, color| {
+            crate::graph::graph_strokes(f, frame, style, color)
+        })
+    }
+
+    /// Draw Oxy axes for `frame` and the curves of `functions` on them, as one undo step.
+    pub fn insert_graph_frame(
+        &mut self,
+        frame: crate::graph::GraphFrame,
+        functions: &[crate::graph::Function],
+    ) -> WidgetFlags {
+        self.insert_generated_strokes(|style, color| {
+            let mut out = crate::graph::axes_strokes(frame, style, color);
+            for f in functions {
+                out.extend(crate::graph::curve_strokes(f, frame, style));
+            }
+            out
+        })
+    }
+
+    /// Draw the variation table of f with its upper left corner at `top_left`.
+    pub fn insert_variation_table(
+        &mut self,
+        f: &crate::graph::Function,
+        top_left: Vector2,
+    ) -> Result<WidgetFlags, String> {
+        let table = crate::graph::VariationTable::study(f)?;
+        Ok(self.insert_generated_strokes(|style, color| {
+            crate::graph::table_strokes(&table, top_left, style, color)
+        }))
+    }
+
     fn math_figures(&self) -> impl Iterator<Item = (StrokeKey, &rnote_compose::MathFigure)> {
         self.store
             .stroke_keys_unordered()

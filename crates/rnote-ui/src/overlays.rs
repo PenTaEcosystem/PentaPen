@@ -1,7 +1,7 @@
 // Imports
 use crate::RnPensSideBar;
 use crate::canvaswrapper::RnCanvasWrapper;
-use crate::{RnAppWindow, RnColorPicker, RnPenPicker, dialogs};
+use crate::{RnAiMenu, RnAppWindow, RnColorPicker, RnPenPicker, dialogs};
 use core::time::Duration;
 use gtk4::{
     CompositeTemplate, Overlay, ProgressBar, ScrolledWindow, Widget, gio, glib, glib::clone,
@@ -31,6 +31,12 @@ mod imp {
         pub(crate) penpicker: TemplateChild<RnPenPicker>,
         #[template_child]
         pub(crate) colorpicker: TemplateChild<RnColorPicker>,
+        #[template_child]
+        pub(crate) top_bar: TemplateChild<gtk4::Box>,
+        #[template_child]
+        pub(crate) quickbar: TemplateChild<gtk4::Box>,
+        #[template_child]
+        pub(crate) aimenu: TemplateChild<RnAiMenu>,
         #[template_child]
         pub(crate) tabview: TemplateChild<adw::TabView>,
         #[template_child]
@@ -75,7 +81,7 @@ mod imp {
     impl RnOverlays {
         fn setup_toolbar_overlay(&self) {
             self.toolbar_overlay
-                .set_measure_overlay(&*self.colorpicker, true);
+                .set_measure_overlay(&*self.top_bar, true);
             self.toolbar_overlay
                 .set_measure_overlay(&*self.penpicker, true);
             self.toolbar_overlay
@@ -112,6 +118,14 @@ impl RnOverlays {
         self.imp().colorpicker.get()
     }
 
+    pub(crate) fn quickbar(&self) -> gtk4::Box {
+        self.imp().quickbar.get()
+    }
+
+    pub(crate) fn aimenu(&self) -> RnAiMenu {
+        self.imp().aimenu.get()
+    }
+
     pub(crate) fn toast_overlay(&self) -> adw::ToastOverlay {
         self.imp().toast_overlay.get()
     }
@@ -139,6 +153,8 @@ impl RnOverlays {
     pub(crate) fn init(&self, appwindow: &RnAppWindow) {
         let imp = self.imp();
         imp.colorpicker.get().init(appwindow);
+        crate::quickbar::build(appwindow, &imp.quickbar.get());
+        imp.aimenu.get().init(appwindow);
         imp.penssidebar.get().init(appwindow);
         imp.penpicker.get().init(appwindow);
         imp.penssidebar.get().brush_page().init(appwindow);

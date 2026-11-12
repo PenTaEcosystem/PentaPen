@@ -92,6 +92,8 @@ mod imp {
         pub(crate) show_drawing_cursor: Cell<bool>,
         pub(crate) text_input_enabled: Cell<bool>,
         pub(crate) picking_center: Cell<bool>,
+        /// The AI assistant waits for a tap on the board (its "pick a point" button).
+        pub(crate) picking_ai_point: Cell<bool>,
 
         pub(crate) last_export_dir: RefCell<Option<gio::File>>,
     }
@@ -191,6 +193,7 @@ mod imp {
                 show_drawing_cursor: Cell::new(false),
                 text_input_enabled: Cell::new(false),
                 picking_center: Cell::new(false),
+                picking_ai_point: Cell::new(false),
 
                 last_export_dir: RefCell::new(None),
             }
@@ -1051,6 +1054,19 @@ impl RnCanvas {
 
     pub(crate) fn is_picking_center(&self) -> bool {
         self.imp().picking_center.get()
+    }
+
+    pub(crate) fn is_picking_ai_point(&self) -> bool {
+        self.imp().picking_ai_point.get()
+    }
+
+    pub(crate) fn set_picking_ai_point(&self, picking: bool) {
+        self.imp().picking_ai_point.set(picking);
+        if picking {
+            self.set_cursor_from_name(Some("crosshair"));
+        } else {
+            self.set_cursor(Some(&*self.imp().regular_cursor.borrow()));
+        }
     }
 
     pub(crate) fn set_picking_center(&self, picking: bool) {

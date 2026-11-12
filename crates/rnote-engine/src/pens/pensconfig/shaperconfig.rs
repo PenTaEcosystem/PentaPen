@@ -61,6 +61,9 @@ pub struct ShaperConfig {
     pub math_auto_intersections: bool,
     #[serde(default = "default_false", rename = "math_show_centers")]
     pub math_show_centers: bool,
+    /// Off: new lines and figures are drawn without visible points (they still snap and drag).
+    #[serde(default = "default_true", rename = "math_show_points")]
+    pub math_show_points: bool,
 }
 
 fn default_math_center_label() -> String {
@@ -91,6 +94,7 @@ impl Default for ShaperConfig {
             math_center_label: String::from("O"),
             math_auto_intersections: true,
             math_show_centers: false,
+            math_show_points: true,
         }
     }
 }

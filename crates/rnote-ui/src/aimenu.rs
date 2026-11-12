@@ -2,13 +2,14 @@
 use crate::appwindow::RnAppWindow;
 use gtk4::{
     Button, CompositeTemplate, Entry, Label, MenuButton, PasswordEntry, Popover, ScrolledWindow,
-    Widget, glib, pango, prelude::*, subclass::prelude::*,
+    TextView, Widget, gdk, glib, pango, prelude::*, subclass::prelude::*,
 };
 use p2d::math::Vector2;
 use rnote_compose::Shape;
 use rnote_compose::geometry::triangle::TriangleCenterType;
 use rnote_compose::geometry::{LineStyle, MathFigure, PointId};
-use std::cell::RefCell;
+use rnote_engine::graph::{Function, GraphFrame};
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 /// Connection to an OpenAI-compatible chat completions API (OpenAI, a proxy, a custom server).
@@ -74,7 +75,15 @@ Rules:
 - Respect requested lengths and angles. If the user gives lengths in cm, 1 cm = 40 px.
 - "style" (lines and circles) is "solid", "dashed" or "dotted"; use dashed for auxiliary lines.
 - To change an existing line (e.g. "make AB dashed"), list it in "lines" with the new style: lines between existing points are restyled, not redrawn.
-- Intersections are added automatically."#;
+- Intersections are added automatically.
+Coordinate plane (hệ trục Oxy), function graphs (đồ thị hàm số), variation tables (bảng biến thiên):
+- "axes": {"x_min": -5, "x_max": 5, "y_min": -5, "y_max": 5, "unit": 40} draws Oxy with O at the anchor.
+  With "axes" (or "graphs"), ALL "points" coordinates are in axis units with y UPWARDS: A(1; 2) is {"name": "A", "x": 1, "y": 2}.
+- "graphs": [{"f": "x^3-3*x+1", "table": true}] draws y = f(x) on the axes; "table": true also draws its variation table.
+  Write f with + - * / ^ ( ), sqrt(), abs(), sin cos tan ln log exp, pi; the variable is x.
+  Choose the window so extrema, intercepts and asymptotes are visible.
+- "tables": [{"f": "(2*x+1)/(x-1)"}] draws only the variation table of f.
+- Points, lines and constructions still work on the axes (e.g. A, B on the plane, segment AB, midpoint)."#;
 
 #[derive(serde::Deserialize, Debug, Default)]
 #[serde(default)]
@@ -90,6 +99,44 @@ struct GeometryJson {
     remove_points: Vec<String>,
     remove_lines: Vec<JsonLineRef>,
     remove_circles: Vec<String>,
+    axes: Option<JsonAxes>,
+    graphs: Vec<JsonGraph>,
+    tables: Vec<JsonGraph>,
+}
+
+#[derive(serde::Deserialize, Debug, Default, Clone)]
+#[serde(default)]
+struct JsonAxes {
+    x_min: Option<f64>,
+    x_max: Option<f64>,
+    y_min: Option<f64>,
+    y_max: Option<f64>,
+    unit: Option<f64>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct JsonGraph {
+    f: String,
+    #[serde(default)]
+    table: bool,
+}
+
+/// The Oxy frame the reply asks for, with O at `anchor`; None for a plain geometry reply.
+fn graph_frame(geom: &GeometryJson, anchor: Vector2) -> Option<GraphFrame> {
+    if geom.axes.is_none() && geom.graphs.is_empty() {
+        return None;
+    }
+    let a = geom.axes.clone().unwrap_or_default();
+    let range = |lo: Option<f64>, hi: Option<f64>| {
+        let lo = lo.unwrap_or(-5.0).clamp(-50.0, 49.0);
+        (lo, hi.unwrap_or(5.0).clamp(lo + 1.0, 50.0))
+    };
+    Some(GraphFrame {
+        origin: anchor,
+        unit: a.unit.unwrap_or(40.0).clamp(10.0, 200.0),
+        x_range: range(a.x_min, a.x_max),
+        y_range: range(a.y_min, a.y_max),
+    })
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -596,10 +643,16 @@ mod imp {
         #[template_child]
         pub(crate) chat_box: TemplateChild<gtk4::Box>,
         #[template_child]
-        pub(crate) prompt_entry: TemplateChild<Entry>,
+        pub(crate) prompt_view: TemplateChild<TextView>,
+        #[template_child]
+        pub(crate) pick_point_button: TemplateChild<Button>,
         #[template_child]
         pub(crate) send_button: TemplateChild<Button>,
         pub(crate) appwindow: RefCell<Option<glib::WeakRef<RnAppWindow>>>,
+        /// Bumped by every point pick, so a stale 3 s timeout does not cancel a newer pick
+        pub(crate) pick_generation: Cell<u32>,
+        /// Bubble margins (end, bottom) when a drag started
+        pub(crate) drag_origin: Cell<(i32, i32)>,
     }
 
     #[glib::object_subclass]
@@ -621,6 +674,7 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
             self.menubutton.get().set_popover(Some(&self.popover.get()));
+            self.setup_drag();
         }
 
         fn dispose(&self) {
@@ -632,6 +686,45 @@ mod imp {
     }
 
     impl WidgetImpl for RnAiMenu {}
+
+    impl RnAiMenu {
+        /// Drag the bubble around the board (assistive-touch style). A short press still opens
+        /// the chat: the drag only claims the gesture after the pointer moved a few pixels.
+        fn setup_drag(&self) {
+            let obj = self.obj();
+            let drag = gtk4::GestureDrag::new();
+            drag.set_propagation_phase(gtk4::PropagationPhase::Capture);
+            let claimed = std::rc::Rc::new(Cell::new(false));
+            let w = obj.downgrade();
+            let c = claimed.clone();
+            drag.connect_drag_begin(move |_, _, _| {
+                c.set(false);
+                if let Some(o) = w.upgrade() {
+                    o.imp().drag_origin.set((o.margin_end(), o.margin_bottom()));
+                }
+            });
+            let w = obj.downgrade();
+            drag.connect_drag_update(move |g, dx, dy| {
+                let Some(o) = w.upgrade() else { return };
+                if !claimed.get() {
+                    if dx.hypot(dy) < 6.0 {
+                        return;
+                    }
+                    claimed.set(true);
+                    g.set_state(gtk4::EventSequenceState::Claimed);
+                }
+                let (end, bottom) = o.imp().drag_origin.get();
+                let (pw, ph) = o
+                    .parent()
+                    .map(|p| (p.width(), p.height()))
+                    .unwrap_or((i32::MAX, i32::MAX));
+                let (w, h) = (o.width(), o.height());
+                o.set_margin_end((end - dx as i32).clamp(0, (pw - w).max(0)));
+                o.set_margin_bottom((bottom - dy as i32).clamp(0, (ph - h).max(0)));
+            });
+            obj.add_controller(drag);
+        }
+    }
 }
 
 glib::wrapper! {
@@ -653,7 +746,60 @@ impl RnAiMenu {
 
     pub(crate) fn open_menu(&self) {
         self.imp().popover.popup();
-        self.imp().prompt_entry.grab_focus();
+        self.imp().prompt_view.grab_focus();
+    }
+
+    /// The board was tapped while the pick button waited: put the nearest point's name
+    /// (or the coordinates) into the prompt and reopen the chat.
+    pub(crate) fn point_picked(&self, pos: Vector2) {
+        let imp = self.imp();
+        imp.pick_generation
+            .set(imp.pick_generation.get().wrapping_add(1));
+        let Some(canvas) = self.appwindow().and_then(|w| w.active_tab_canvas()) else {
+            return;
+        };
+        let reach = 30.0 / canvas.engine_ref().camera.total_zoom().max(0.01);
+        let nearest = canvas
+            .engine_ref()
+            .named_figure_points()
+            .into_iter()
+            .map(|(name, p)| ((p - pos).length(), name))
+            .filter(|(d, _)| *d <= reach)
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        let text = match nearest {
+            Some((_, name)) => format!("điểm {name} "),
+            None => format!("điểm ({:.0}, {:.0}) ", pos.x, pos.y),
+        };
+        imp.prompt_view.buffer().insert_at_cursor(&text);
+        self.open_menu();
+    }
+
+    /// Wait 3 s for one tap on the board (see `point_picked`), then give up.
+    fn start_point_pick(&self) {
+        let Some(appwindow) = self.appwindow() else {
+            return;
+        };
+        let Some(canvas) = appwindow.active_tab_canvas() else {
+            return;
+        };
+        let imp = self.imp();
+        let generation = imp.pick_generation.get().wrapping_add(1);
+        imp.pick_generation.set(generation);
+        canvas.set_picking_ai_point(true);
+        self.close_menu();
+        appwindow.overlays().dispatch_toast_text(
+            "Chạm vào một điểm trên bảng (3 giây)…",
+            Some(std::time::Duration::from_secs(3)),
+        );
+        let this = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+            if this.imp().pick_generation.get() != generation || !canvas.is_picking_ai_point() {
+                return;
+            }
+            canvas.set_picking_ai_point(false);
+            this.append_ai_message("Hết 3 giây, chưa chọn điểm nào.");
+            this.open_menu();
+        });
     }
 
     pub(crate) fn close_menu(&self) {
@@ -783,16 +929,34 @@ impl RnAiMenu {
         imp.send_button
             .connect_clicked(move |_| this.send_prompt_entry());
         let this = self.clone();
-        imp.prompt_entry
-            .connect_activate(move |_| this.send_prompt_entry());
+        imp.pick_point_button
+            .connect_clicked(move |_| this.start_point_pick());
+
+        // Enter sends, Shift+Enter inserts a line break
+        let keys = gtk4::EventControllerKey::new();
+        keys.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        let this = self.clone();
+        keys.connect_key_pressed(move |_, key, _, modifiers| {
+            if matches!(key, gdk::Key::Return | gdk::Key::KP_Enter)
+                && !modifiers.contains(gdk::ModifierType::SHIFT_MASK)
+            {
+                this.send_prompt_entry();
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+        imp.prompt_view.add_controller(keys);
     }
 
     fn send_prompt_entry(&self) {
-        let entry = &self.imp().prompt_entry;
-        let text = entry.text().to_string();
+        let buffer = self.imp().prompt_view.buffer();
+        let text = buffer
+            .text(&buffer.start_iter(), &buffer.end_iter(), false)
+            .to_string();
         if !text.trim().is_empty() {
-            entry.set_text("");
-            self.handle_user_prompt(&text);
+            buffer.set_text("");
+            self.handle_user_prompt(text.trim());
         }
     }
 
@@ -836,6 +1000,63 @@ impl RnAiMenu {
         glib::idle_add_local_once(move || {
             adj.set_value(adj.upper() - adj.page_size());
         });
+    }
+
+    /// Axes, graphs and variation tables of a reply. Point coordinates are turned from axis
+    /// units into canvas pixels so the figure lands on the drawn plane. Returns whether
+    /// anything was drawn, and the formulas that could not be read.
+    fn draw_graphs(&self, geom: &mut GeometryJson, anchor: Vector2) -> (bool, Vec<String>) {
+        let mut warnings = Vec::new();
+        let Some(appwindow) = self.appwindow() else {
+            return (false, warnings);
+        };
+        let Some(canvas) = appwindow.active_tab_canvas() else {
+            return (false, warnings);
+        };
+        let mut parse = |g: &JsonGraph| match Function::parse(&g.f) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                warnings.push(format!("{}: {e}", g.f));
+                None
+            }
+        };
+        let graphs: Vec<(Function, bool)> = geom
+            .graphs
+            .iter()
+            .filter_map(|g| parse(g).map(|f| (f, g.table)))
+            .collect();
+        let only_tables: Vec<Function> = geom.tables.iter().filter_map(parse).collect();
+        let frame = graph_frame(geom, anchor);
+        let mut drew = false;
+        // Tables go right of the plane (or at the anchor without one), one under the other
+        let mut table_at = anchor;
+        if let Some(frame) = frame {
+            let fns: Vec<Function> = graphs.iter().map(|(f, _)| f.clone()).collect();
+            let flags = canvas.engine_mut().insert_graph_frame(frame, &fns);
+            appwindow.handle_widget_flags(flags, &canvas);
+            for p in &mut geom.points {
+                let c = frame.to_canvas(p.x, p.y);
+                (p.x, p.y) = (c.x, c.y);
+            }
+            table_at = frame.to_canvas(frame.x_range.1, frame.y_range.1) + Vector2::new(60.0, 0.0);
+            drew = true;
+        }
+        let tables = graphs
+            .iter()
+            .filter(|(_, t)| *t)
+            .map(|(f, _)| f)
+            .chain(only_tables.iter());
+        for f in tables {
+            match canvas.engine_mut().insert_variation_table(f, table_at) {
+                Ok(flags) => {
+                    appwindow.handle_widget_flags(flags, &canvas);
+                    table_at.y += 240.0;
+                    drew = true;
+                }
+                Err(e) => warnings.push(format!("{}: {e}", f.text)),
+            }
+        }
+        (drew, warnings)
     }
 
     fn handle_user_prompt(&self, prompt: &str) {
@@ -905,6 +1126,7 @@ impl RnAiMenu {
             };
 
             let explanation = geom.explanation.clone().unwrap_or_default();
+            let (drew_graph, graph_warnings) = this.draw_graphs(&mut geom, anchor);
 
             // Case 1: Editing a clicked/selected shape in-place!
             if let Some((sel_key, _, _, mut target_fig)) = selected_target {
@@ -971,6 +1193,18 @@ impl RnAiMenu {
             let (fig, warnings) = build_figure(&geom, &existing);
             if fig.points.is_empty() && restyled > 0 {
                 this.append_ai_message(&glib::markup_escape_text(&explanation));
+                return;
+            }
+            if fig.points.is_empty() && drew_graph {
+                let mut msg = glib::markup_escape_text(&explanation).to_string();
+                if !graph_warnings.is_empty() {
+                    msg.push_str(&format!(
+                        "
+<i>Bỏ qua: {}</i>",
+                        glib::markup_escape_text(&graph_warnings.join("; "))
+                    ));
+                }
+                this.append_ai_message(&msg);
                 return;
             }
             if fig.points.is_empty() {
@@ -1112,5 +1346,26 @@ mod tests {
             })
             .unwrap();
         assert_eq!(bc.style, LineStyle::Dashed);
+    }
+
+    #[test]
+    fn coordinate_replies_use_axis_units() {
+        let reply = r#"{"explanation": "Đồ thị y = x^2 - 2x",
+         "axes": {"x_min": -2, "x_max": 4, "unit": 50},
+         "graphs": [{"f": "x^2-2*x", "table": true}],
+         "points": [{"name": "A", "x": 1, "y": -1}]}"#;
+        let geom = parse_geometry(reply).unwrap();
+        let frame = graph_frame(&geom, Vector2::new(400.0, 300.0)).unwrap();
+        assert_eq!(
+            (frame.unit, frame.x_range, frame.y_range),
+            (50.0, (-2.0, 4.0), (-5.0, 5.0))
+        );
+        // A(1; -1) is right of and below O on the canvas
+        assert_eq!(frame.to_canvas(1.0, -1.0), Vector2::new(450.0, 350.0));
+        assert!(geom.graphs[0].table);
+        assert_eq!(Function::parse(&geom.graphs[0].f).unwrap().eval(3.0), 3.0);
+        // A plain geometry reply draws no plane
+        let plain = parse_geometry(r#"{"points": [{"name": "A", "x": 0, "y": 0}]}"#).unwrap();
+        assert!(graph_frame(&plain, Vector2::new(0.0, 0.0)).is_none());
     }
 }

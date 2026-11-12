@@ -322,6 +322,7 @@ impl ObjectImpl for RnAppWindow {
 
                 self.overlays.penpicker().set_visible(!focus_mode);
                 self.overlays.colorpicker().set_visible(!focus_mode);
+                self.overlays.quickbar().set_visible(!focus_mode);
                 self.overlays.sidebar_box().set_visible(!focus_mode);
             }
             "devel-mode" => {

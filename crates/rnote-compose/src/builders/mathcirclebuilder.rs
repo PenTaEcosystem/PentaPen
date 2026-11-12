@@ -68,7 +68,9 @@ impl MathCircleBuilder {
         };
 
         let mut fig = MathFigure::new();
-        let center_id = fig.add_point(center_pos, Some(self.center_label.clone()));
+        // An empty name (center on an existing point) stays unnamed instead of an empty label
+        let center_label = (!self.center_label.is_empty()).then(|| self.center_label.clone());
+        let center_id = fig.add_point(center_pos, center_label);
         let boundary_pos = center_pos + dir * final_radius;
         let boundary_id = fig.add_point(boundary_pos, Some(self.boundary_label.clone()));
         fig.add_circle_through(center_id, boundary_id);

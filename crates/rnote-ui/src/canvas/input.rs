@@ -205,6 +205,17 @@ pub(crate) fn handle_pointer_controller_event(
                 PenState::Up => {
                     canvas.enable_drawing_cursor(false);
 
+                    if canvas.is_picking_ai_point() {
+                        canvas.set_picking_ai_point(false);
+                        if let Some(appwindow) = canvas
+                            .root()
+                            .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
+                        {
+                            appwindow.overlays().aimenu().point_picked(element.pos);
+                        }
+                        return (glib::Propagation::Stop, pen_state, stylus_active);
+                    }
+
                     if canvas.is_picking_center() {
                         canvas.set_picking_center(false);
                         let pos = element.pos;
@@ -226,7 +237,7 @@ pub(crate) fn handle_pointer_controller_event(
                                 &format!("Đã chấm tâm O tại ({:.0}, {:.0}).", pos.x, pos.y),
                                 None,
                             );
-                            let aimenu = appwindow.main_header().aimenu();
+                            let aimenu = appwindow.overlays().aimenu();
                             aimenu.update_center_status();
                             aimenu.append_ai_message(&format!(
                                 "<b>Đã chấm tâm O</b> tại toạ độ ({:.0}, {:.0}).",
@@ -259,7 +270,7 @@ pub(crate) fn handle_pointer_controller_event(
                             canvas
                                 .engine_mut()
                                 .set_last_center_point(element.pos, Some(lbl));
-                            appwindow.main_header().aimenu().update_center_status();
+                            appwindow.overlays().aimenu().update_center_status();
                         }
                     }
 
@@ -278,13 +289,13 @@ pub(crate) fn handle_pointer_controller_event(
                         .root()
                         .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
                     {
-                        appwindow.main_header().aimenu().update_center_status();
+                        appwindow.overlays().aimenu().update_center_status();
                     }
                 }
                 PenState::Proximity => {
                     canvas.enable_drawing_cursor(false);
 
-                    if canvas.is_picking_center() {
+                    if canvas.is_picking_center() || canvas.is_picking_ai_point() {
                         return (glib::Propagation::Stop, pen_state, stylus_active);
                     }
 
@@ -303,7 +314,7 @@ pub(crate) fn handle_pointer_controller_event(
                     canvas.grab_focus();
                     canvas.enable_drawing_cursor(true);
 
-                    if canvas.is_picking_center() {
+                    if canvas.is_picking_center() || canvas.is_picking_ai_point() {
                         return (glib::Propagation::Stop, pen_state, stylus_active);
                     }
 
@@ -322,7 +333,7 @@ pub(crate) fn handle_pointer_controller_event(
                         .root()
                         .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
                     {
-                        appwindow.main_header().aimenu().update_center_status();
+                        appwindow.overlays().aimenu().update_center_status();
                     }
                 }
             }
@@ -342,6 +353,10 @@ pub(crate) fn handle_key_controller_key_pressed(
     canvas.grab_focus();
 
     let now = Instant::now();
+    if gdk_key == gdk::Key::Escape && canvas.is_picking_ai_point() {
+        canvas.set_picking_ai_point(false);
+        return glib::Propagation::Stop;
+    }
     if gdk_key == gdk::Key::Escape && canvas.is_picking_center() {
         canvas.set_picking_center(false);
         if let Some(appwindow) = canvas

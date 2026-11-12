@@ -28,6 +28,7 @@ pub(crate) mod mainheader;
 pub(crate) mod overlays;
 pub(crate) mod penpicker;
 pub(crate) mod penssidebar;
+pub(crate) mod quickbar;
 pub(crate) mod settingspanel;
 pub(crate) mod sidebar;
 pub(crate) mod strokecontentpaintable;

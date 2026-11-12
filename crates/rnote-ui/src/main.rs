@@ -30,6 +30,7 @@ pub(crate) mod penpicker;
 pub(crate) mod penssidebar;
 pub(crate) mod quickbar;
 pub(crate) mod settingspanel;
+pub(crate) mod shaperprompt;
 pub(crate) mod sidebar;
 pub(crate) mod strokecontentpaintable;
 pub(crate) mod strokecontentpreview;

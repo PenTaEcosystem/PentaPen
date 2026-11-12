@@ -93,6 +93,11 @@ mod imp {
 /// The default timeout for regular text toasts.
 pub(crate) const TEXT_TOAST_TIMEOUT_DEFAULT: Option<Duration> = Some(Duration::from_secs(5));
 
+/// Every toast closes by itself: `None` means the default, toasts with a button and errors stay a bit longer.
+fn toast_secs(timeout: Option<Duration>, default_secs: u32) -> u32 {
+    timeout.map_or(default_secs, |t| (t.as_secs() as u32).max(1))
+}
+
 glib::wrapper! {
     pub(crate) struct RnOverlays(ObjectSubclass<imp::RnOverlays>)
         @extends Widget,
@@ -448,7 +453,7 @@ impl RnOverlays {
             .title(text)
             .priority(adw::ToastPriority::High)
             .button_label(button_label)
-            .timeout(timeout.map(|t| t.as_secs() as u32).unwrap_or(0))
+            .timeout(toast_secs(timeout, 10))
             .build();
         toast.connect_button_clicked(button_callback);
         let toast_ref = glib::WeakRef::new();
@@ -484,7 +489,7 @@ impl RnOverlays {
         let toast = adw::Toast::builder()
             .title(text)
             .priority(adw::ToastPriority::High)
-            .timeout(timeout.map(|t| t.as_secs() as u32).unwrap_or(0))
+            .timeout(toast_secs(timeout, 5))
             .build();
         self.toast_overlay().add_toast(toast.clone());
         toast
@@ -506,7 +511,7 @@ impl RnOverlays {
         let toast = adw::Toast::builder()
             .title(err)
             .priority(adw::ToastPriority::High)
-            .timeout(0)
+            .timeout(8)
             .build();
         self.toast_overlay().add_toast(toast.clone());
         error!("{err}");

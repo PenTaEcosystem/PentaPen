@@ -385,6 +385,11 @@ impl RnAppWindow {
         if let Some(enable_text_input) = widget_flags.enable_text_input {
             canvas.enable_text_input(enable_text_input);
         }
+        if widget_flags.shaper_prompt {
+            // Deferred: the pen event that asked may still hold the engine
+            let (appwindow, canvas) = (self.clone(), canvas.clone());
+            glib::idle_add_local_once(move || crate::shaperprompt::show(&appwindow, &canvas));
+        }
     }
 
     /// Get the active (selected) tab page.

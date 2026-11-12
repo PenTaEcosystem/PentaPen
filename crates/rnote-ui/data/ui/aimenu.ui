@@ -2,46 +2,51 @@
 <interface>
   <template class="RnAiMenu" parent="GtkWidget">
     <property name="layout-manager">
-      <object class="GtkBinLayout" />
-    </property>
-    <child>
-      <object class="GtkMenuButton" id="menubutton">
-        <property name="label">AI</property>
-        <property name="direction">up</property>
-        <property name="width-request">56</property>
-        <property name="height-request">56</property>
-        <property name="tooltip_text" translatable="yes">Trợ lý hình học AI (phím A) · kéo để di chuyển</property>
-        <style>
-          <class name="circular" />
-          <class name="suggested-action" />
-          <class name="ai_bubble" />
-        </style>
+      <object class="GtkBoxLayout">
+        <property name="orientation">vertical</property>
+        <property name="spacing">8</property>
       </object>
-    </child>
-    <object class="GtkPopover" id="popover">
-      <property name="width-request">400</property>
-      <property name="height-request">480</property>
-      <child>
-        <object class="GtkBox">
-          <property name="orientation">vertical</property>
-          <property name="spacing">8</property>
-          <property name="margin-top">10</property>
-          <property name="margin-bottom">10</property>
-          <property name="margin-start">10</property>
-          <property name="margin-end">10</property>
+    </property>
+    <!-- Chat panel: lives inside the window (popovers get clipped and offset on Windows) -->
+    <child>
+      <object class="GtkBox" id="panel">
+        <property name="visible">false</property>
+        <property name="orientation">vertical</property>
+        <property name="spacing">8</property>
+        <property name="width-request">380</property>
+        <property name="height-request">470</property>
+        <property name="halign">end</property>
+        <style>
+          <class name="ai_panel" />
+        </style>
 
-          <!-- Header (clean text, no icons) -->
+          <!-- Header: drag it to move the assistant, x closes the panel -->
           <child>
-            <object class="GtkBox">
+            <object class="GtkBox" id="header">
               <property name="orientation">vertical</property>
               <property name="spacing">2</property>
               <child>
-                <object class="GtkLabel">
-                  <property name="label" translatable="yes">Trợ lý hình học AI</property>
-                  <property name="halign">start</property>
-                  <attributes>
-                    <attribute name="weight" value="bold" />
-                  </attributes>
+                <object class="GtkBox">
+                  <child>
+                    <object class="GtkLabel">
+                      <property name="label" translatable="yes">Trợ lý hình học AI</property>
+                      <property name="halign">start</property>
+                      <property name="hexpand">true</property>
+                      <attributes>
+                        <attribute name="weight" value="bold" />
+                      </attributes>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkButton" id="close_button">
+                      <property name="icon-name">window-close-symbolic</property>
+                      <property name="tooltip-text" translatable="yes">Thu gọn</property>
+                      <style>
+                        <class name="flat" />
+                        <class name="circular" />
+                      </style>
+                    </object>
+                  </child>
                 </object>
               </child>
               <child>
@@ -69,52 +74,116 @@
                   <property name="margin-top">6</property>
                   <child>
                     <object class="GtkLabel">
-                      <property name="label">Base URL</property>
+                      <property name="label">Nhà cung cấp</property>
                       <property name="xalign">0</property>
                       <layout><property name="column">0</property><property name="row">0</property></layout>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkDropDown" id="provider_dropdown">
+                      <property name="model">
+                        <object class="GtkStringList">
+                          <items>
+                            <item>Google Gemini</item>
+                            <item>OpenAI</item>
+                            <item>OpenRouter</item>
+                            <item>Tùy chỉnh (tương thích OpenAI)</item>
+                          </items>
+                        </object>
+                      </property>
+                      <layout><property name="column">1</property><property name="row">0</property></layout>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkLabel" id="key_hint_label">
+                      <property name="xalign">0</property>
+                      <property name="wrap">true</property>
+                      <property name="use-markup">true</property>
+                      <style>
+                        <class name="caption" />
+                        <class name="dim-label" />
+                      </style>
+                      <layout><property name="column">0</property><property name="row">1</property><property name="column-span">2</property></layout>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkLabel">
+                      <property name="label">Base URL</property>
+                      <property name="xalign">0</property>
+                      <layout><property name="column">0</property><property name="row">2</property></layout>
                     </object>
                   </child>
                   <child>
                     <object class="GtkEntry" id="base_url_entry">
                       <property name="hexpand">true</property>
                       <property name="placeholder-text">https://api.openai.com/v1</property>
-                      <layout><property name="column">1</property><property name="row">0</property></layout>
+                      <layout><property name="column">1</property><property name="row">2</property></layout>
                     </object>
                   </child>
                   <child>
                     <object class="GtkLabel">
                       <property name="label">Model</property>
                       <property name="xalign">0</property>
-                      <layout><property name="column">0</property><property name="row">1</property></layout>
+                      <layout><property name="column">0</property><property name="row">3</property></layout>
                     </object>
                   </child>
                   <child>
-                    <object class="GtkEntry" id="model_entry">
-                      <property name="placeholder-text">gpt-4o-mini</property>
-                      <layout><property name="column">1</property><property name="row">1</property></layout>
+                    <object class="GtkBox">
+                      <property name="spacing">4</property>
+                      <child>
+                        <object class="GtkEntry" id="model_entry">
+                          <property name="hexpand">true</property>
+                          <property name="placeholder-text">gemini-2.5-flash</property>
+                        </object>
+                      </child>
+                      <child>
+                        <object class="GtkMenuButton" id="model_menubutton">
+                          <property name="icon-name">pan-down-symbolic</property>
+                          <property name="tooltip-text">Chọn model (bấm "Thử kết nối" để lấy danh sách model của tài khoản)</property>
+                        </object>
+                      </child>
+                      <layout><property name="column">1</property><property name="row">3</property></layout>
                     </object>
                   </child>
                   <child>
                     <object class="GtkLabel">
                       <property name="label">API key</property>
                       <property name="xalign">0</property>
-                      <layout><property name="column">0</property><property name="row">2</property></layout>
+                      <layout><property name="column">0</property><property name="row">4</property></layout>
                     </object>
                   </child>
                   <child>
                     <object class="GtkPasswordEntry" id="api_key_entry">
-                      <property name="show-peek-icon">false</property>
-                      <layout><property name="column">1</property><property name="row">2</property></layout>
+                      <property name="show-peek-icon">true</property>
+                      <layout><property name="column">1</property><property name="row">4</property></layout>
                     </object>
                   </child>
                   <child>
-                    <object class="GtkButton" id="save_key_button">
-                      <property name="label">Lưu</property>
+                    <object class="GtkCheckButton" id="animate_check">
+                      <property name="label">Vẽ từng nét (hình hiện dần như đang viết)</property>
+                      <property name="active">true</property>
+                      <layout><property name="column">0</property><property name="row">5</property><property name="column-span">2</property></layout>
+                    </object>
+                  </child>
+                  <child>
+                    <object class="GtkBox">
+                      <property name="spacing">6</property>
                       <property name="halign">end</property>
-                      <style>
-                        <class name="suggested-action" />
-                      </style>
-                      <layout><property name="column">1</property><property name="row">3</property></layout>
+                      <child>
+                        <object class="GtkButton" id="test_button">
+                          <property name="label">Thử kết nối</property>
+                          <property name="tooltip-text">Kiểm tra key và lấy danh sách model</property>
+                        </object>
+                      </child>
+                      <child>
+                        <object class="GtkButton" id="save_key_button">
+                          <property name="label">Lưu</property>
+                          <style>
+                            <class name="suggested-action" />
+                          </style>
+                        </object>
+                      </child>
+                      <layout><property name="column">1</property><property name="row">6</property></layout>
                     </object>
                   </child>
                 </object>
@@ -264,8 +333,21 @@
               </child>
             </object>
           </child>
-        </object>
-      </child>
-    </object>
+      </object>
+    </child>
+    <child>
+      <object class="GtkButton" id="bubble">
+        <property name="label">AI</property>
+        <property name="halign">end</property>
+        <property name="width-request">56</property>
+        <property name="height-request">56</property>
+        <property name="tooltip_text" translatable="yes">Trợ lý hình học AI (phím A) · kéo để di chuyển</property>
+        <style>
+          <class name="circular" />
+          <class name="suggested-action" />
+          <class name="ai_bubble" />
+        </style>
+      </object>
+    </child>
   </template>
 </interface>

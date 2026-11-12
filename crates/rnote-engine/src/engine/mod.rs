@@ -1,6 +1,7 @@
 // Modules
 pub mod animation;
 pub mod config;
+pub mod drawing;
 pub mod export;
 pub mod import;
 pub mod rendering;
@@ -12,6 +13,7 @@ pub mod visual_debug;
 pub use animation::Animation;
 pub use config::EngineConfig;
 pub use config::EngineConfigShared;
+pub use drawing::DrawAnimation;
 pub use export::ExportPrefs;
 pub use import::ImportPrefs;
 pub use snapshot::EngineSnapshot;
@@ -927,6 +929,11 @@ impl Engine {
 
     /// Insert a shape stroke into the store and regenerate its rendering.
     pub fn insert_shape(&mut self, shape: rnote_compose::Shape) -> WidgetFlags {
+        self.insert_shape_key(shape).0
+    }
+
+    /// [Self::insert_shape], also returning the new stroke.
+    pub fn insert_shape_key(&mut self, shape: rnote_compose::Shape) -> (WidgetFlags, StrokeKey) {
         let style = self
             .config
             .read()
@@ -946,14 +953,111 @@ impl Engine {
         let mut widget_flags = self.record(std::time::Instant::now());
         widget_flags.store_modified = true;
         widget_flags.redraw = true;
+        (widget_flags, key)
+    }
+
+    /// Input the shaper asked for with the last tap (taken once).
+    pub fn take_shaper_prompt(&mut self) -> Option<crate::pens::shaper::ShaperPrompt> {
+        self.penholder.take_shaper_prompt()
+    }
+
+    /// The next point name not used on the page (A, B, ..., Z, A1, ...).
+    pub fn suggest_point_label(&self) -> String {
+        crate::pens::shaper::free_labels(&self.store, 1)
+            .pop()
+            .unwrap_or_else(|| "M".to_string())
+    }
+
+    /// Regenerate one changed stroke and record it as an undo step.
+    fn finish_stroke_edit(&mut self, key: StrokeKey) -> WidgetFlags {
+        self.store.update_geometry_for_strokes(&[key]);
+        self.store.regenerate_rendering_for_stroke(
+            key,
+            self.camera.viewport(),
+            self.camera.image_scale(),
+        );
+        let mut widget_flags = self.record(std::time::Instant::now());
+        widget_flags.store_modified = true;
+        widget_flags.redraw = true;
         widget_flags
+    }
+
+    /// A named point on the figure line `line` of stroke `key`, as near to `pos` as the line allows.
+    /// It stays on the line when the line moves (it splits the segment and is constrained to it).
+    pub fn add_point_on_line(
+        &mut self,
+        key: StrokeKey,
+        line: rnote_compose::geometry::LineId,
+        pos: Vector2,
+        label: Option<String>,
+    ) -> WidgetFlags {
+        use rnote_compose::geometry::Constraint;
+        let Some(crate::strokes::Stroke::ShapeStroke(ss)) = self.store.get_stroke_mut(key) else {
+            return WidgetFlags::default();
+        };
+        let rnote_compose::Shape::MathFigure(fig) = &mut ss.shape else {
+            return WidgetFlags::default();
+        };
+        let Some((a, b)) = fig.lines.get(&line).map(|l| (l.p1, l.p2)) else {
+            return WidgetFlags::default();
+        };
+        let (pa, pb) = (fig.points[&a].pos, fig.points[&b].pos);
+        let d = pb - pa;
+        let t = if d.length_squared() > 0.0 {
+            ((pos - pa).dot(d) / d.length_squared()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let p = fig.add_point(pa + d * t, label.filter(|l| !l.trim().is_empty()));
+        let id = fig.next_constraint_id();
+        fig.add_constraint(Constraint::PointOnLine { id, p, a, b });
+        fig.split_segments_at_point(p, 0.5);
+        self.finish_stroke_edit(key)
+    }
+
+    /// A circle of radius `radius` around `center`: added to the figure of the existing point `on`,
+    /// or drawn as a new figure with a center point named `label`.
+    pub fn add_circle_with_radius(
+        &mut self,
+        center: Vector2,
+        on: Option<(StrokeKey, rnote_compose::geometry::PointId)>,
+        label: Option<String>,
+        radius: f64,
+    ) -> WidgetFlags {
+        let style = crate::pens::shaper::math_line_style(
+            self.config
+                .read()
+                .pens_config
+                .shaper_config
+                .smooth_options
+                .line_style,
+        );
+        let label = label.filter(|l| !l.trim().is_empty());
+        if let Some((key, pid)) = on
+            && let Some(crate::strokes::Stroke::ShapeStroke(ss)) = self.store.get_stroke_mut(key)
+            && let rnote_compose::Shape::MathFigure(fig) = &mut ss.shape
+            && fig.points.contains_key(&pid)
+        {
+            let cid = fig.add_circle_radius(pid, radius);
+            fig.circles.get_mut(&cid).unwrap().style = style;
+            let pt = fig.points.get_mut(&pid).unwrap();
+            if pt.label.is_none() {
+                pt.label = label;
+            }
+            return self.finish_stroke_edit(key);
+        }
+        let mut fig = rnote_compose::geometry::MathFigure::new();
+        let pid = fig.add_point(center, label);
+        let cid = fig.add_circle_radius(pid, radius);
+        fig.circles.get_mut(&cid).unwrap().style = style;
+        self.insert_shape(rnote_compose::Shape::MathFigure(fig))
     }
 
     /// Insert strokes as one undo step, in the shaper's current color and width.
     fn insert_generated_strokes(
         &mut self,
         make: impl FnOnce(&rnote_compose::Style, rnote_compose::Color) -> Vec<crate::strokes::Stroke>,
-    ) -> WidgetFlags {
+    ) -> (WidgetFlags, Vec<StrokeKey>) {
         let style = self
             .config
             .read()
@@ -966,7 +1070,7 @@ impl Engine {
             .map(|stroke| self.store.insert_stroke(stroke, None))
             .collect();
         self.store.update_geometry_for_strokes(&keys);
-        for key in keys {
+        for &key in &keys {
             self.store.regenerate_rendering_for_stroke(
                 key,
                 self.camera.viewport(),
@@ -977,7 +1081,7 @@ impl Engine {
             | self.record(std::time::Instant::now());
         widget_flags.store_modified = true;
         widget_flags.redraw = true;
-        widget_flags
+        (widget_flags, keys)
     }
 
     /// Draw y = f(x) with axes. `center` is where the middle of the window lands on the canvas.
@@ -999,6 +1103,7 @@ impl Engine {
         self.insert_generated_strokes(|style, color| {
             crate::graph::graph_strokes(f, frame, style, color)
         })
+        .0
     }
 
     /// Draw Oxy axes for `frame` and the curves of `functions` on them, as one undo step.
@@ -1006,7 +1111,7 @@ impl Engine {
         &mut self,
         frame: crate::graph::GraphFrame,
         functions: &[crate::graph::Function],
-    ) -> WidgetFlags {
+    ) -> (WidgetFlags, Vec<StrokeKey>) {
         self.insert_generated_strokes(|style, color| {
             let mut out = crate::graph::axes_strokes(frame, style, color);
             for f in functions {
@@ -1021,7 +1126,7 @@ impl Engine {
         &mut self,
         f: &crate::graph::Function,
         top_left: Vector2,
-    ) -> Result<WidgetFlags, String> {
+    ) -> Result<(WidgetFlags, Vec<StrokeKey>), String> {
         let table = crate::graph::VariationTable::study(f)?;
         Ok(self.insert_generated_strokes(|style, color| {
             crate::graph::table_strokes(&table, top_left, style, color)
@@ -1332,6 +1437,7 @@ impl Engine {
                 rnote_compose::geometry::LineStyle::Solid => "solid",
                 rnote_compose::geometry::LineStyle::Dashed => "dashed",
                 rnote_compose::geometry::LineStyle::Dotted => "dotted",
+                rnote_compose::geometry::LineStyle::DashDot => "dashdot",
             };
             lines_desc.push(format!("{n1}-{n2}({st})"));
         }

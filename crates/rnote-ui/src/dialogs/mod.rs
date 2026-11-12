@@ -90,8 +90,13 @@ pub(crate) async fn dialog_new_doc(appwindow: &RnAppWindow, canvas: &RnCanvas) {
     let dialog: adw::AlertDialog = builder.object("dialog_new_doc").unwrap();
 
     let new_doc = |appwindow: &RnAppWindow, canvas: &RnCanvas| {
-        let widget_flags = canvas.engine_mut().clear();
+        // A new document starts from the default board, not the one picked for the last document
+        canvas.engine_mut().document.config = appwindow.document_config_preset_ref().clone();
+        let widget_flags =
+            canvas.engine_mut().clear() | canvas.engine_mut().background_rendering_regenerate();
         appwindow.handle_widget_flags(widget_flags, canvas);
+        crate::quickbar::match_ink_to_board(appwindow);
+        appwindow.sidebar().settings_panel().refresh_ui(appwindow);
 
         canvas.set_unsaved_changes(false);
         canvas.set_empty(true);

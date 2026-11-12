@@ -92,7 +92,7 @@ impl SmoothOptions {
     /// Updates the line cap
     pub fn update_line_cap(&mut self, line_cap: LineCap) {
         // Dotted style requires a round LineCap
-        if self.line_style.is_dotted() && line_cap != LineCap::Rounded {
+        if self.line_style.needs_round_cap() && line_cap != LineCap::Rounded {
             self.line_style = LineStyle::Solid;
         }
         self.line_cap = line_cap;
@@ -102,7 +102,7 @@ impl SmoothOptions {
     /// Updates the line style
     pub fn update_line_style(&mut self, line_style: LineStyle) {
         // Dotted style requires a round LineCap
-        if line_style.is_dotted() {
+        if line_style.needs_round_cap() {
             self.line_cap = LineCap::Rounded;
         }
         self.line_style = line_style;
@@ -224,6 +224,9 @@ pub enum LineStyle {
     /// Dashed line style, the dashes have more space between them
     #[serde(rename = "dashed_wide")]
     DashedWide,
+    /// Dash, dot, dash, dot ... (needs a round line cap for the dots)
+    #[serde(rename = "dash_dot")]
+    DashDot,
 }
 
 impl LineStyle {
@@ -235,6 +238,7 @@ impl LineStyle {
             Self::DashedNarrow => vec![1.0, 0.618], // golden ratio, the longer segment is the dash itself
             Self::DashedEquidistant => vec![1.0, 1.0],
             Self::DashedWide => vec![1.0, 1.618], // golden ratio, the longer segment is the space between dashes
+            Self::DashDot => vec![1.6, 0.8, 0.0, 0.8], // the zero-length dash becomes a dot with a round cap
         }
     }
     /// Indicates whether or not the LineStyle is dotted
@@ -245,7 +249,13 @@ impl LineStyle {
             Self::DashedNarrow => false,
             Self::DashedEquidistant => false,
             Self::DashedWide => false,
+            Self::DashDot => false,
         }
+    }
+
+    /// Dots are zero-length dashes, only visible with a round line cap.
+    pub fn needs_round_cap(&self) -> bool {
+        matches!(self, Self::Dotted | Self::DashDot)
     }
 }
 

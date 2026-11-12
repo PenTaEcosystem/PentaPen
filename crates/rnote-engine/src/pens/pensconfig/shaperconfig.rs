@@ -64,6 +64,9 @@ pub struct ShaperConfig {
     /// Off: new lines and figures are drawn without visible points (they still snap and drag).
     #[serde(default = "default_true", rename = "math_show_points")]
     pub math_show_points: bool,
+    /// Which polygon the triangle tool draws (triangle kinds, quadrilaterals, regular polygons).
+    #[serde(default, rename = "math_shape_kind")]
+    pub math_shape_kind: rnote_compose::builders::MathShapeKind,
 }
 
 fn default_math_center_label() -> String {
@@ -95,6 +98,7 @@ impl Default for ShaperConfig {
             math_auto_intersections: true,
             math_show_centers: false,
             math_show_points: true,
+            math_shape_kind: Default::default(),
         }
     }
 }

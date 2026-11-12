@@ -207,6 +207,7 @@
                         <item translatable="yes">Dashed (narrow)</item>
                         <item translatable="yes">Dashed (equidistant)</item>
                         <item translatable="yes">Dashed (wide)</item>
+                        <item translatable="yes">Dash-dot</item>
                       </items>
                     </object>
                   </property>

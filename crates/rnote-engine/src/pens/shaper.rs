@@ -80,11 +80,30 @@ enum ShaperState {
     },
 }
 
+/// Something the shaper needs typed in: the UI asks (see [WidgetFlags::shaper_prompt]) and calls back
+/// into the engine (`Engine::add_point_on_line`, `Engine::add_circle_with_radius`).
+#[derive(Debug, Clone)]
+pub enum ShaperPrompt {
+    /// The point tool tapped a line: name the new point on it
+    PointOnLine {
+        key: StrokeKey,
+        line: LineId,
+        pos: Vector2,
+    },
+    /// The circle tool tapped without dragging: type the radius around `center`
+    /// (an existing figure point when `on` is set)
+    CircleRadius {
+        center: Vector2,
+        on: Option<(StrokeKey, PointId)>,
+    },
+}
+
 #[derive(Debug)]
 pub struct Shaper {
     state: ShaperState,
     hovered_stroke: Option<StrokeKey>,
     active_snap: Option<SnapCandidate>,
+    prompt: Option<ShaperPrompt>,
 }
 
 impl Default for Shaper {
@@ -93,6 +112,7 @@ impl Default for Shaper {
             state: ShaperState::Idle,
             hovered_stroke: None,
             active_snap: None,
+            prompt: None,
         }
     }
 }
@@ -104,6 +124,38 @@ impl Shaper {
             ShaperState::Manipulating { selected, .. } => Some(selected.key),
             _ => None,
         }
+    }
+
+    /// The input the last tap asked for, if any (taken once).
+    pub fn take_prompt(&mut self) -> Option<ShaperPrompt> {
+        self.prompt.take()
+    }
+
+    /// Point tool on a line (not on a point): ask for the name of a new point on that line.
+    fn point_on_line_prompt(
+        &mut self,
+        pos: Vector2,
+        engine_view: &EngineViewMut,
+        line_threshold: f64,
+        point_threshold: f64,
+    ) -> bool {
+        if engine_view.config.pens_config.shaper_config.builder_type != ShapeBuilderType::MathPoint
+            || point_hit(pos, engine_view.store, point_threshold).is_some()
+        {
+            return false;
+        }
+        let Some(key) = hit_test_stroke(pos, engine_view.store, line_threshold) else {
+            return false;
+        };
+        let Some(line) = figure_of(engine_view.store, key)
+            .and_then(|fig| nearest_figure_segment(fig, pos, line_threshold))
+        else {
+            return false;
+        };
+        self.prompt = Some(ShaperPrompt::PointOnLine { key, line, pos });
+        self.state = ShaperState::Idle;
+        self.active_snap = None;
+        true
     }
 
     /// Clear any active shape selection in Shaper.
@@ -359,6 +411,23 @@ impl PenBehaviour for Shaper {
             // IDLE STATE
             // ==========================================
             (ShaperState::Idle, PenEvent::Down { element, .. }) => {
+                if self.point_on_line_prompt(
+                    element.pos,
+                    engine_view,
+                    hit_threshold,
+                    point_threshold,
+                ) {
+                    widget_flags.shaper_prompt = true;
+                    widget_flags.redraw = true;
+                    return (
+                        EventResult {
+                            handled: true,
+                            propagate: EventPropagation::Stop,
+                            progress: PenProgress::Finished,
+                        },
+                        widget_flags,
+                    );
+                }
                 let action = press_action(
                     element.pos,
                     engine_view.store,
@@ -418,8 +487,25 @@ impl PenBehaviour for Shaper {
                 PenEvent::Down { mut element, .. },
             ) => {
                 if active_handle.is_none() {
-                    // A press only picks what to do; motion afterwards drags or draws.
                     let sel = selected.clone();
+                    if self.point_on_line_prompt(
+                        element.pos,
+                        engine_view,
+                        hit_threshold,
+                        point_threshold,
+                    ) {
+                        widget_flags.shaper_prompt = true;
+                        widget_flags.redraw = true;
+                        return (
+                            EventResult {
+                                handled: true,
+                                propagate: EventPropagation::Stop,
+                                progress: PenProgress::Finished,
+                            },
+                            widget_flags,
+                        );
+                    }
+                    // A press only picks what to do; motion afterwards drags or draws.
                     let action = press_action(
                         element.pos,
                         engine_view.store,
@@ -695,12 +781,22 @@ impl PenBehaviour for Shaper {
                             .shaper_config
                             .gen_style_for_current_options();
 
+                        // Circle tool tapped without dragging: ask for the radius instead of guessing one
+                        let circle_tap = !*moved
+                            && engine_view.config.pens_config.shaper_config.builder_type
+                                == ShapeBuilderType::MathCircle
+                            && matches!(event, PenEvent::Up { .. });
+                        if circle_tap {
+                            let on = pick.take().and_then(|p| Some((p.key, p.point?)));
+                            self.prompt = Some(ShaperPrompt::CircleRadius { center: *start, on });
+                            widget_flags.shaper_prompt = true;
+                        }
                         // A click on an existing point selects it instead of drawing.
                         let clicked_pick = pick.take().filter(|_| !*moved);
                         // A click without drag must not leave stacked points behind
                         let shapes: Vec<Shape> = shapes
                             .into_iter()
-                            .filter(|_| clicked_pick.is_none())
+                            .filter(|_| clicked_pick.is_none() && !circle_tap)
                             .filter(|s| !is_redundant_figure(s, engine_view.store))
                             .collect();
                         let shapes_emitted = !shapes.is_empty();
@@ -1402,15 +1498,14 @@ fn figure_of(store: &crate::store::StrokeStore, key: StrokeKey) -> Option<&MathF
     }
 }
 
-/// Flip solid <-> dashed for the line or circle nearest to `pos` (within `threshold`),
+/// Cycle solid -> dashed -> dotted -> dash-dot for the line or circle nearest to `pos` (within `threshold`),
 /// or for all lines of the figure when the click was not on one (e.g. on a point).
 fn toggle_dashed(fig: &mut MathFigure, pos: Vector2, threshold: f64) {
-    let flip = |s: LineStyle| {
-        if s == LineStyle::Solid {
-            LineStyle::Dashed
-        } else {
-            LineStyle::Solid
-        }
+    let flip = |s: LineStyle| match s {
+        LineStyle::Solid => LineStyle::Dashed,
+        LineStyle::Dashed => LineStyle::Dotted,
+        LineStyle::Dotted => LineStyle::DashDot,
+        LineStyle::DashDot => LineStyle::Solid,
     };
     let at = |id: PointId| fig.points.get(&id).map(|p| p.pos);
     let line = fig
@@ -1790,11 +1885,11 @@ fn new_builder(
         ShapeBuilderType::CubBez => Box::new(CubBezBuilder::start(element, now)),
         ShapeBuilderType::Polyline => Box::new(PolylineBuilder::start(element, now)),
         ShapeBuilderType::Polygon => Box::new(PolygonBuilder::start(element, now)),
-        ShapeBuilderType::MathTriangle => {
-            let mut free = free_labels(store, 3).into_iter();
-            let labels = [(); 3].map(|_| free.next().unwrap_or_default());
-            Box::new(MathTriangleBuilder::start_with_labels(element, labels))
-        }
+        // Vertices stay unnamed: name the ones you need with the point tool or the point editor
+        ShapeBuilderType::MathTriangle => Box::new(MathTriangleBuilder::start_with_kind(
+            element,
+            shaper_config.math_shape_kind,
+        )),
         ShapeBuilderType::MathCircle => {
             // Center: the configured name unless a point already has it. Through point: next free name.
             let configured = &shaper_config.math_center_label;
@@ -1878,7 +1973,7 @@ fn label_in_use(store: &crate::store::StrokeStore, label: &str) -> bool {
 }
 
 /// The first `n` single-letter labels not yet used by any figure point (O is kept for centers).
-fn free_labels(store: &crate::store::StrokeStore, n: usize) -> Vec<String> {
+pub(crate) fn free_labels(store: &crate::store::StrokeStore, n: usize) -> Vec<String> {
     let used: std::collections::HashSet<String> = store
         .stroke_keys_unordered()
         .into_iter()
@@ -1894,13 +1989,14 @@ fn free_labels(store: &crate::store::StrokeStore, n: usize) -> Vec<String> {
         .collect()
 }
 
-/// The figure line style for a shaper line style: dotted stays dotted, any dash is dashed.
-fn math_line_style(style: rnote_compose::style::smooth::LineStyle) -> LineStyle {
+/// The figure line style for a shaper line style: dotted and dash-dot stay, any other dash is dashed.
+pub(crate) fn math_line_style(style: rnote_compose::style::smooth::LineStyle) -> LineStyle {
     use rnote_compose::style::smooth::LineStyle as S;
     match style {
         S::Solid => LineStyle::Solid,
         S::Dotted => LineStyle::Dotted,
         S::DashedNarrow | S::DashedEquidistant | S::DashedWide => LineStyle::Dashed,
+        S::DashDot => LineStyle::DashDot,
     }
 }
 
@@ -2037,6 +2133,38 @@ mod tests {
         let mut free = MathFigure::new();
         free.add_point(Vector2::new(200.0, 0.0), Some("C".into()));
         assert!(!is_redundant_figure(&Shape::MathFigure(free), &store));
+    }
+
+    #[test]
+    fn point_on_line_and_circle_from_radius() {
+        use rnote_compose::geometry::Constraint;
+        let mut engine = crate::Engine::default();
+        let mut fig = MathFigure::new();
+        let a = fig.add_point(Vector2::new(0.0, 0.0), None);
+        let b = fig.add_point(Vector2::new(100.0, 0.0), None);
+        let line = fig.add_segment(a, b);
+        let _ = engine.insert_shape(Shape::MathFigure(fig));
+        let key = engine.store.stroke_keys_unordered()[0];
+
+        // Tapped a bit off the line: the point lands on it, splits it and is tied to it
+        let _ = engine.add_point_on_line(key, line, Vector2::new(30.0, 7.0), Some("M".into()));
+        let fig = figure_of(&engine.store, key).unwrap();
+        let m = fig.find_point_by_label("M").unwrap();
+        assert_eq!(fig.points[&m].pos, Vector2::new(30.0, 0.0));
+        assert_eq!(fig.lines.len(), 2);
+        assert!(
+            fig.constraints
+                .iter()
+                .any(|c| matches!(c, Constraint::PointOnLine { p, .. } if *p == m))
+        );
+
+        // Around an existing point: same figure. On empty board: a new figure with a named center
+        let _ = engine.add_circle_with_radius(Vector2::new(30.0, 0.0), Some((key, m)), None, 50.0);
+        assert_eq!(figure_of(&engine.store, key).unwrap().circles.len(), 1);
+        let _ =
+            engine.add_circle_with_radius(Vector2::new(500.0, 500.0), None, Some("O".into()), 40.0);
+        assert_eq!(engine.store.stroke_keys_unordered().len(), 2);
+        assert_eq!(engine.suggest_point_label(), "A");
     }
 
     #[test]

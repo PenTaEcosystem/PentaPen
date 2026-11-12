@@ -17,6 +17,7 @@ pub fn draw_math_figure(
     let solid_style = StrokeStyle::new();
     let dashed_style = StrokeStyle::new().dash_pattern(&[6.0, 4.0]);
     let dotted_style = StrokeStyle::new().dash_pattern(&[2.0, 3.0]);
+    let dashdot_style = StrokeStyle::new().dash_pattern(&[9.0, 3.0, 2.0, 3.0]);
 
     // 1. Draw Lines
     for line in figure.lines.values() {
@@ -33,6 +34,7 @@ pub fn draw_math_figure(
                 LineStyle::Solid => &solid_style,
                 LineStyle::Dashed => &dashed_style,
                 LineStyle::Dotted => &dotted_style,
+                LineStyle::DashDot => &dashdot_style,
             };
 
             cx.stroke_styled(kurbo_line, &stroke_brush, stroke_width, style);
@@ -88,6 +90,7 @@ pub fn draw_math_figure(
                 LineStyle::Solid => &solid_style,
                 LineStyle::Dashed => &dashed_style,
                 LineStyle::Dotted => &dotted_style,
+                LineStyle::DashDot => &dashdot_style,
             };
             cx.stroke_styled(circle, &stroke_brush, stroke_width, style);
         }

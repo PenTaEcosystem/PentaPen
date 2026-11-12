@@ -34,7 +34,7 @@ pub use linebuilder::LineBuilder;
 pub use mathcirclebuilder::MathCircleBuilder;
 pub use mathlinebuilder::MathLineBuilder;
 pub use mathpointbuilder::MathPointBuilder;
-pub use mathtrianglebuilder::MathTriangleBuilder;
+pub use mathtrianglebuilder::{MathShapeKind, MathTriangleBuilder};
 pub use penpathcurvedbuilder::PenPathCurvedBuilder;
 pub use penpathmodeledbuilder::PenPathModeledBuilder;
 pub use penpathsimplebuilder::PenPathSimpleBuilder;

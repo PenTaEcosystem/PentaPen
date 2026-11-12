@@ -1,6 +1,8 @@
 // Geometry module: Construction (Geo-Aid) and Constraint Solver (SolveSpace slvs)
 /// Classical ruler-and-compass geometric constructions (Geo-Aid architecture)
 pub mod construction;
+/// Frames of a figure being drawn element by element
+mod drawing;
 /// Geometric entity representations (Points, Lines, Circles, Marks)
 pub mod entity;
 /// Mathematical figures with dynamic entities and constraints

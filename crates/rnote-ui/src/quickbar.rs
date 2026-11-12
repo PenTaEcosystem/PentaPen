@@ -2,9 +2,7 @@
 //! board backgrounds and function graphs, instead of digging through the sidebar and settings.
 
 use crate::RnAppWindow;
-use gtk4::{
-    Box as GtkBox, Button, MenuButton, Orientation, Popover, ToggleButton, gdk, glib, prelude::*,
-};
+use gtk4::{Box as GtkBox, Button, MenuButton, Orientation, Popover, gdk, glib, prelude::*};
 use rnote_compose::Color;
 use rnote_engine::document::background::PatternStyle;
 use rnote_engine::ext::GdkRGBAExt;
@@ -13,7 +11,11 @@ use rnote_engine::graph::Function;
 pub(crate) fn build(appwindow: &RnAppWindow, bar: &GtkBox) {
     // Geometry tools (the win.math-tool action also switches to the shaper)
     let tools = [
-        ("shapebuilder-mathpoint-symbolic", "point", "Điểm (P)"),
+        (
+            "shapebuilder-mathpoint-symbolic",
+            "point",
+            "Điểm (P) · chạm vào đường thẳng để thêm điểm nằm trên nó",
+        ),
         (
             "shapebuilder-mathline-symbolic",
             "line",
@@ -27,80 +29,152 @@ pub(crate) fn build(appwindow: &RnAppWindow, bar: &GtkBox) {
         (
             "shapebuilder-mathcircle-symbolic",
             "circle",
-            "Đường tròn (C)",
-        ),
-        (
-            "shapebuilder-mathtriangle-symbolic",
-            "triangle",
-            "Tam giác (T)",
-        ),
-        (
-            "shapebuilder-rectangle-symbolic",
-            "rectangle",
-            "Hình chữ nhật (S)",
-        ),
-        (
-            "shapebuilder-coordsystem2d-symbolic",
-            "coords",
-            "Hệ trục toạ độ",
+            "Đường tròn (C) · kéo để vẽ, chạm vào tâm để nhập bán kính",
         ),
     ];
     for (icon, target, tip) in tools {
-        let b = Button::builder()
-            .icon_name(icon)
-            .tooltip_text(tip)
-            .action_name("win.math-tool")
-            .action_target(&target.to_variant())
-            .build();
-        b.add_css_class("flat");
-        bar.append(&b);
+        bar.append(&tool_button(icon, target, tip));
     }
+    bar.append(&shapes_button());
+    bar.append(&tool_button(
+        "shapebuilder-coordsystem2d-symbolic",
+        "coords",
+        "Hệ trục toạ độ",
+    ));
 
     bar.append(&gtk4::Separator::new(Orientation::Vertical));
-    bar.append(&dashed_toggle(appwindow));
+    bar.append(&line_style_button(appwindow));
     bar.append(&graph_button(appwindow));
     bar.append(&background_button(appwindow));
 }
 
-/// Solid <-> dashed for the next shapes (all shaper shapes, math figures included).
-fn dashed_toggle(appwindow: &RnAppWindow) -> ToggleButton {
-    use rnote_compose::style::smooth::LineStyle;
-    let t = ToggleButton::builder()
-        .label("╌ ╌")
-        .tooltip_text("Nét đứt cho hình vẽ tiếp theo (chọn một hình rồi bấm D để đổi hình có sẵn)")
+fn tool_button(icon: &str, target: &str, tip: &str) -> Button {
+    let b = Button::builder()
+        .icon_name(icon)
+        .tooltip_text(tip)
+        .action_name("win.math-tool")
+        .action_target(&target.to_variant())
         .build();
-    t.add_css_class("flat");
-    t.set_active(
-        appwindow
-            .engine_config()
-            .read()
-            .pens_config
-            .shaper_config
-            .smooth_options
-            .line_style
-            != LineStyle::Solid,
-    );
+    b.add_css_class("flat");
+    b
+}
+
+/// Triangle kinds, quadrilaterals and regular polygons, drawn by dragging their bounding box.
+fn shapes_button() -> MenuButton {
+    let shapes = [
+        ("triangle", "Tam giác"),
+        ("right_triangle", "Tam giác vuông"),
+        ("isosceles_triangle", "Tam giác cân"),
+        ("equilateral_triangle", "Tam giác đều"),
+        ("square", "Hình vuông"),
+        ("rectangle", "Hình chữ nhật"),
+        ("parallelogram", "Hình bình hành"),
+        ("rhombus", "Hình thoi"),
+        ("trapezoid", "Hình thang"),
+        ("pentagon", "Ngũ giác đều"),
+        ("hexagon", "Lục giác đều"),
+    ];
+    let grid = gtk4::Grid::builder()
+        .row_spacing(4)
+        .column_spacing(4)
+        .margin_top(8)
+        .margin_bottom(8)
+        .margin_start(8)
+        .margin_end(8)
+        .build();
+    let popover = Popover::builder().child(&grid).build();
+    for (i, (kind, name)) in shapes.into_iter().enumerate() {
+        let content = GtkBox::new(Orientation::Vertical, 2);
+        content.append(&gtk4::Image::from_icon_name(&format!(
+            "mathshape-{kind}-symbolic"
+        )));
+        let label = gtk4::Label::new(Some(name));
+        label.add_css_class("caption");
+        content.append(&label);
+        let b = Button::builder()
+            .child(&content)
+            .tooltip_text(format!("{name}: kéo để vẽ, đỉnh không tự đặt tên"))
+            .action_name("win.math-tool")
+            .action_target(&format!("shape:{kind}").to_variant())
+            .width_request(92)
+            .build();
+        b.add_css_class("flat");
+        b.connect_clicked(glib::clone!(
+            #[weak]
+            popover,
+            move |_| popover.popdown()
+        ));
+        grid.attach(&b, (i % 4) as i32, (i / 4) as i32, 1, 1);
+    }
+    let mb = MenuButton::builder()
+        .icon_name("quickbar-shapes-symbolic")
+        .tooltip_text("Tam giác, tứ giác, đa giác đều (T)")
+        .popover(&popover)
+        .build();
+    mb.add_css_class("flat");
+    mb
+}
+
+/// One button cycling solid -> dashed -> dotted -> dash-dot for the next shapes (math figures included).
+fn line_style_button(appwindow: &RnAppWindow) -> Button {
+    use rnote_compose::style::smooth::LineStyle;
+    const STYLES: [(LineStyle, &str, &str); 4] = [
+        (LineStyle::Solid, "linestyle-solid-symbolic", "Nét liền"),
+        (
+            LineStyle::DashedEquidistant,
+            "linestyle-dashed-symbolic",
+            "Nét đứt",
+        ),
+        (LineStyle::Dotted, "linestyle-dotted-symbolic", "Nét chấm"),
+        (
+            LineStyle::DashDot,
+            "linestyle-dashdot-symbolic",
+            "Nét chấm gạch",
+        ),
+    ];
+    fn index_of(s: LineStyle) -> usize {
+        match s {
+            LineStyle::Solid => 0,
+            LineStyle::Dotted => 2,
+            LineStyle::DashDot => 3,
+            _ => 1,
+        }
+    }
+    fn show(b: &Button, i: usize) {
+        b.set_icon_name(STYLES[i].1);
+        b.set_tooltip_text(Some(&format!(
+            "{}: bấm để đổi kiểu nét (liền, đứt, chấm, chấm gạch). Chọn một hình rồi bấm D để đổi nét hình có sẵn.",
+            STYLES[i].2
+        )));
+    }
+    let b = Button::new();
+    b.add_css_class("flat");
+    let current = appwindow
+        .engine_config()
+        .read()
+        .pens_config
+        .shaper_config
+        .smooth_options
+        .line_style;
+    show(&b, index_of(current));
     let w = appwindow.downgrade();
-    t.connect_toggled(move |t| {
+    b.connect_clicked(move |b| {
         let Some(appwindow) = w.upgrade() else { return };
-        appwindow
-            .engine_config()
-            .write()
-            .pens_config
-            .shaper_config
-            .smooth_options
-            .line_style = if t.is_active() {
-            LineStyle::DashedEquidistant
-        } else {
-            LineStyle::Solid
+        let next = {
+            let mut config = appwindow.engine_config().write();
+            let options = &mut config.pens_config.shaper_config.smooth_options;
+            let next = (index_of(options.line_style) + 1) % STYLES.len();
+            options.update_line_style(STYLES[next].0);
+            next
         };
+        show(b, next);
         appwindow
             .overlays()
             .penssidebar()
             .shaper_page()
             .refresh_ui(&appwindow);
     });
-    t
+    b
 }
 
 fn labeled_spin(row: &GtkBox, label: &str, min: f64, max: f64, value: f64) -> gtk4::SpinButton {
@@ -163,8 +237,8 @@ fn graph_button(appwindow: &RnAppWindow) -> MenuButton {
 
     let popover = Popover::builder().child(&content).build();
     let mb = MenuButton::builder()
-        .label("f(x)")
-        .tooltip_text("Vẽ đồ thị hàm số, bảng biến thiên")
+        .icon_name("quickbar-graph-symbolic")
+        .tooltip_text("Vẽ đồ thị hàm số y = f(x), bảng biến thiên")
         .popover(&popover)
         .build();
     mb.add_css_class("flat");
@@ -199,7 +273,7 @@ fn graph_button(appwindow: &RnAppWindow) -> MenuButton {
                 let top_left = center
                     + p2d::math::Vector2::new(0.5 * (x1 - x0) * u + 60.0, -0.5 * (y1 - y0) * u);
                 match canvas.engine_mut().insert_variation_table(&f, top_left) {
-                    Ok(f) => flags |= f,
+                    Ok((f, _)) => flags |= f,
                     Err(e) => {
                         appwindow.overlays().dispatch_toast_text(&e, None);
                     }
@@ -232,22 +306,21 @@ fn background_button(appwindow: &RnAppWindow) -> MenuButton {
     title.set_xalign(0.0);
     content.append(&title);
 
-    // (name, board color, ink color): a dark board switches the ink to chalk white
+    // A dark board switches the ink to chalk white, a light one back to black (match_ink_to_board)
     let presets = [
-        ("Bảng trắng", rgba(1.0, 1.0, 1.0), rgba(0.0, 0.0, 0.0)),
-        ("Giấy kem", rgba(0.99, 0.97, 0.90), rgba(0.0, 0.0, 0.0)),
-        ("Bảng xanh", rgba(0.13, 0.29, 0.22), rgba(1.0, 1.0, 1.0)),
-        ("Bảng đen", rgba(0.11, 0.12, 0.13), rgba(1.0, 1.0, 1.0)),
+        ("Bảng trắng", rgba(1.0, 1.0, 1.0)),
+        ("Giấy kem", rgba(0.99, 0.97, 0.90)),
+        ("Bảng xanh", rgba(0.13, 0.29, 0.22)),
+        ("Bảng đen", rgba(0.11, 0.12, 0.13)),
     ];
     let row = GtkBox::new(Orientation::Horizontal, 4);
     row.add_css_class("linked");
-    for (name, board, ink) in presets {
+    for (name, board) in presets {
         let b = Button::with_label(name);
         let w = appwindow.downgrade();
         b.connect_clicked(move |_| {
             if let Some(appwindow) = w.upgrade() {
                 set_background(&appwindow, Some(board.into_compose_color()), None);
-                appwindow.overlays().colorpicker().set_stroke_color(ink);
             }
         });
         row.append(&b);
@@ -286,10 +359,23 @@ fn background_button(appwindow: &RnAppWindow) -> MenuButton {
     custom.append(&color_button);
     content.append(&custom);
 
+    // Off: "New" starts from the default white board again. On: this board becomes the default.
+    let as_default = gtk4::CheckButton::with_label("Dùng nền này cho tài liệu mới");
+    let w = appwindow.downgrade();
+    as_default.connect_toggled(move |c| {
+        if let Some(appwindow) = w.upgrade() {
+            BOARD_IS_DEFAULT.set(c.is_active());
+            if c.is_active() {
+                copy_board_to_preset(&appwindow);
+            }
+        }
+    });
+    content.append(&as_default);
+
     let popover = Popover::builder().child(&content).build();
     let mb = MenuButton::builder()
-        .label("Nền")
-        .tooltip_text("Đổi nền bảng: màu bảng, dòng kẻ, ô vuông")
+        .icon_name("quickbar-board-symbolic")
+        .tooltip_text("Nền bảng: bảng trắng, xanh, đen, dòng kẻ, ô vuông")
         .popover(&popover)
         .build();
     mb.add_css_class("flat");
@@ -321,5 +407,38 @@ fn set_background(appwindow: &RnAppWindow, color: Option<Color>, pattern: Option
     let mut widget_flags = canvas.engine_mut().background_rendering_regenerate();
     widget_flags.store_modified = true;
     appwindow.handle_widget_flags(widget_flags, &canvas);
+    if BOARD_IS_DEFAULT.get() {
+        copy_board_to_preset(appwindow);
+    }
+    match_ink_to_board(appwindow);
     appwindow.sidebar().settings_panel().refresh_ui(appwindow);
+}
+
+thread_local! {
+    /// "Use this board for new documents" is ticked (GTK widgets live on one thread).
+    static BOARD_IS_DEFAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The active document's board becomes the one new documents and tabs start with.
+fn copy_board_to_preset(appwindow: &RnAppWindow) {
+    if let Some(canvas) = appwindow.active_tab_canvas() {
+        appwindow.document_config_preset_mut().background =
+            canvas.engine_ref().document.config.background;
+    }
+}
+
+/// Chalk-white ink on a dark board, black ink on a light one (only when the ink would be hard to see).
+pub(crate) fn match_ink_to_board(appwindow: &RnAppWindow) {
+    let Some(canvas) = appwindow.active_tab_canvas() else {
+        return;
+    };
+    let bg = canvas.engine_ref().document.config.background.color;
+    let light_board = bg.r + bg.g + bg.b > 1.5;
+    let colorpicker = appwindow.overlays().colorpicker();
+    let ink = colorpicker.stroke_color();
+    let light_ink = ink.red() + ink.green() + ink.blue() > 1.5;
+    if light_board == light_ink {
+        let c = if light_board { 0.0 } else { 1.0 };
+        colorpicker.set_stroke_color(rgba(c, c, c));
+    }
 }

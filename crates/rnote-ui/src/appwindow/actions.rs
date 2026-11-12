@@ -376,7 +376,26 @@ impl RnAppWindow {
             move |_, param| {
                 use rnote_compose::builders::ShapeBuilderType;
                 let param = param.and_then(|p| p.get::<String>());
+                // "shape:right_triangle", "shape:hexagon", ...: the triangle tool draws that polygon
+                let shape_kind = param
+                    .as_deref()
+                    .and_then(|p| p.strip_prefix("shape:"))
+                    .and_then(|k| {
+                        serde_json::from_value::<rnote_compose::builders::MathShapeKind>(
+                            serde_json::Value::String(k.to_string()),
+                        )
+                        .ok()
+                    });
+                if let Some(kind) = shape_kind {
+                    appwindow
+                        .engine_config()
+                        .write()
+                        .pens_config
+                        .shaper_config
+                        .math_shape_kind = kind;
+                }
                 let builder_type = match param.as_deref() {
+                    _ if shape_kind.is_some() => ShapeBuilderType::MathTriangle,
                     Some("point") => ShapeBuilderType::MathPoint,
                     Some("line" | "line-nopoints") => ShapeBuilderType::MathLine,
                     Some("circle") => ShapeBuilderType::MathCircle,

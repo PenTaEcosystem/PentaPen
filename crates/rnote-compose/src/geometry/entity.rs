@@ -28,6 +28,8 @@ pub enum LineStyle {
     Dashed,
     /// Dotted line
     Dotted,
+    /// Dash-dot line (axes of symmetry, hidden edges)
+    DashDot,
 }
 
 /// Type of line representation.

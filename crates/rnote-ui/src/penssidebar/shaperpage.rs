@@ -379,7 +379,7 @@ impl RnShaperPage {
 
                     // If the user has selected a straight line cap while the line style was dotted, then we update the line style to be straight
                     if line_cap == LineCap::Straight
-                        && shaperpage.smoothstyle_line_style().is_dotted()
+                        && shaperpage.smoothstyle_line_style().needs_round_cap()
                     {
                         shaperpage
                             .imp()
@@ -408,7 +408,7 @@ impl RnShaperPage {
                     let line_style = shaperpage.smoothstyle_line_style();
 
                     // If the user has selected a dotted line style, then we update the line cap to be rounded
-                    if line_style.is_dotted() {
+                    if line_style.needs_round_cap() {
                         shaperpage
                             .imp()
                             .smoothstyle_line_cap_row

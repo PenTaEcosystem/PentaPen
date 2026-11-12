@@ -280,6 +280,15 @@ impl RnWorkspacesBar {
                     );
                 }
             }
+        } else {
+            // An empty or missing dir (e.g. the schema default "./") leaves the file list empty and
+            // breaks "open folder" / "add workspace": fall back to the home folder.
+            for entry in &workspace_list.iter() {
+                let dir = PathBuf::from(entry.dir());
+                if !dir.is_absolute() || !dir.is_dir() {
+                    entry.set_dir(RnWorkspaceListEntry::default().dir());
+                }
+            }
         }
 
         self.imp().workspace_list.replace_self(workspace_list);

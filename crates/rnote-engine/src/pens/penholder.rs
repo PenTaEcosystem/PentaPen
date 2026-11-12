@@ -109,6 +109,14 @@ impl PenHolder {
         }
     }
 
+    /// Input the shaper asked for with the last tap, see [crate::pens::shaper::ShaperPrompt].
+    pub fn take_shaper_prompt(&mut self) -> Option<crate::pens::shaper::ShaperPrompt> {
+        match &mut self.current_pen {
+            Pen::Shaper(shaper) => shaper.take_prompt(),
+            _ => None,
+        }
+    }
+
     /// Clear any active selection in the Shaper pen.
     pub fn clear_shaper_selection(&mut self) -> bool {
         if let Pen::Shaper(shaper) = &mut self.current_pen

@@ -1,25 +1,91 @@
 // Imports
 use crate::appwindow::RnAppWindow;
 use gtk4::{
-    Button, CompositeTemplate, Entry, Label, MenuButton, PasswordEntry, Popover, ScrolledWindow,
-    TextView, Widget, gdk, glib, pango, prelude::*, subclass::prelude::*,
+    Button, CompositeTemplate, Entry, Label, PasswordEntry, ScrolledWindow, TextView, Widget, gdk,
+    glib, pango, prelude::*, subclass::prelude::*,
 };
 use p2d::math::Vector2;
 use rnote_compose::Shape;
 use rnote_compose::geometry::triangle::TriangleCenterType;
 use rnote_compose::geometry::{LineStyle, MathFigure, PointId};
 use rnote_engine::graph::{Function, GraphFrame};
+use rnote_engine::store::StrokeKey;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-/// Connection to an OpenAI-compatible chat completions API (OpenAI, a proxy, a custom server).
+/// Connection to an OpenAI-compatible chat completions API (Gemini, OpenAI, a proxy, a custom server).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 #[serde(default)]
 pub struct AiConfig {
+    /// One of the [PROVIDERS] ids; empty in configs saved before providers existed
+    pub provider: String,
     /// e.g. `https://api.openai.com/v1`; `/chat/completions` is appended.
     pub base_url: String,
     pub model: String,
     pub api_key: String,
+    /// Off by default: the AI's drawings appear stroke by stroke unless this is set
+    pub instant_draw: bool,
+}
+
+/// A service with an OpenAI-compatible API: id, base URL, suggested models, where to get a key (markup).
+struct Provider {
+    id: &'static str,
+    base_url: &'static str,
+    models: &'static [&'static str],
+    key_hint: &'static str,
+}
+
+/// In the order of the dropdown in aimenu.ui.
+const PROVIDERS: [Provider; 4] = [
+    Provider {
+        id: "gemini",
+        // Gemini's OpenAI-compatible endpoint: same requests, Bearer key
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        models: &[
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash",
+        ],
+        key_hint: "Lấy API key miễn phí tại <a href=\"https://aistudio.google.com/apikey\">aistudio.google.com/apikey</a> (đăng nhập Google, bấm Create API key).",
+    },
+    Provider {
+        id: "openai",
+        base_url: "https://api.openai.com/v1",
+        models: &["gpt-4o-mini", "gpt-4o", "gpt-4.1", "gpt-4.1-mini"],
+        key_hint: "API key tại <a href=\"https://platform.openai.com/api-keys\">platform.openai.com/api-keys</a>.",
+    },
+    Provider {
+        id: "openrouter",
+        base_url: "https://openrouter.ai/api/v1",
+        models: &[
+            "google/gemini-2.5-flash",
+            "google/gemini-2.5-pro",
+            "openai/gpt-4o-mini",
+        ],
+        key_hint: "Một key dùng được nhiều hãng: <a href=\"https://openrouter.ai/keys\">openrouter.ai/keys</a>.",
+    },
+    Provider {
+        id: "custom",
+        base_url: "",
+        models: &[],
+        key_hint: "Máy chủ bất kỳ có API /chat/completions kiểu OpenAI, vd. Ollama: http://localhost:11434/v1 (không cần key).",
+    },
+];
+
+/// The provider of a config; old configs are recognized by their URL.
+fn provider_index(cfg: &AiConfig) -> usize {
+    if let Some(i) = PROVIDERS.iter().position(|p| p.id == cfg.provider) {
+        return i;
+    }
+    let url = cfg.base_url.trim();
+    if url.is_empty() {
+        return 0;
+    }
+    PROVIDERS
+        .iter()
+        .position(|p| !p.base_url.is_empty() && url.starts_with(p.base_url))
+        .unwrap_or(PROVIDERS.len() - 1)
 }
 
 impl AiConfig {
@@ -73,7 +139,7 @@ Rules:
   - Keep `"replace": false` when adding constructions (altitude, median, bisector, circumcircle, incircle, tangents, etc.), adding lines/circles/points, restyling lines/circles, moving specific points (by listing them in `"points"` with new canvas coordinates), resizing an existing circle (by listing its `"center"` and new `"radius"` in `"circles"`), renaming points (`"rename"`), or removing elements (`"remove_points"`, `"remove_lines"`, `"remove_circles"`).
   - Set `"replace": true` ONLY when the user asks to replace or redraw the entire selected shape into a completely different shape (e.g. "đổi thành hình vuông", "vẽ lại thành tam giác đều").
 - Respect requested lengths and angles. If the user gives lengths in cm, 1 cm = 40 px.
-- "style" (lines and circles) is "solid", "dashed" or "dotted"; use dashed for auxiliary lines.
+- "style" (lines and circles) is "solid", "dashed", "dotted" or "dashdot"; use dashed for auxiliary lines.
 - To change an existing line (e.g. "make AB dashed"), list it in "lines" with the new style: lines between existing points are restyled, not redrawn.
 - Intersections are added automatically.
 Coordinate plane (hệ trục Oxy), function graphs (đồ thị hàm số), variation tables (bảng biến thiên):
@@ -180,7 +246,9 @@ struct JsonCircle {
 /// "dashed" / "dash" / "nét đứt" ... -> a line style; None when not given or not understood.
 fn line_style(style: Option<&str>) -> Option<LineStyle> {
     let s = style?.to_lowercase();
-    if s.contains("dash") || s.contains("đứt") {
+    if s.contains("dashdot") || s.contains("dash-dot") || s.contains("chấm gạch") {
+        Some(LineStyle::DashDot)
+    } else if s.contains("dash") || s.contains("đứt") {
         Some(LineStyle::Dashed)
     } else if s.contains("dot") || s.contains("chấm") {
         Some(LineStyle::Dotted)
@@ -538,34 +606,29 @@ fn apply_geometry_to_figure(
     warnings
 }
 
-/// POST one chat completion with curl (bundled with Windows 10+ and Linux).
+/// One request to the API with curl (bundled with Windows 10+ and Linux): POST `body` or GET.
 /// The API key goes through stdin so it never shows up in the process list.
-fn chat_completion(cfg: &AiConfig, user: &str) -> Result<String, String> {
+fn call_api(
+    cfg: &AiConfig,
+    path: &str,
+    body: Option<&serde_json::Value>,
+) -> Result<serde_json::Value, String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    let url = format!(
-        "{}/chat/completions",
-        cfg.base_url.trim().trim_end_matches('/')
-    );
-    let body = serde_json::json!({
-        "model": cfg.model.trim(),
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user},
-        ],
-    });
+    let url = format!("{}/{path}", cfg.base_url.trim().trim_end_matches('/'));
     let body_path = std::env::temp_dir().join(format!("pentapen-ai-{}.json", std::process::id()));
-    std::fs::write(&body_path, body.to_string()).map_err(|e| e.to_string())?;
-
     let mut cmd = Command::new("curl");
-    cmd.args(["-sS", "--max-time", "180", "-X", "POST", &url])
+    cmd.args(["-sS", "--max-time", "180", &url])
         .args(["-H", "Content-Type: application/json", "-H", "@-"])
-        .arg("--data-binary")
-        .arg(format!("@{}", body_path.display()))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(body) = body {
+        std::fs::write(&body_path, body.to_string()).map_err(|e| e.to_string())?;
+        cmd.args(["-X", "POST", "--data-binary"])
+            .arg(format!("@{}", body_path.display()));
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -587,7 +650,9 @@ fn chat_completion(cfg: &AiConfig, user: &str) -> Result<String, String> {
         }
         child.wait_with_output().map_err(|e| e.to_string())
     })();
-    let _ = std::fs::remove_file(&body_path);
+    if body.is_some() {
+        let _ = std::fs::remove_file(&body_path);
+    }
     let out = result?;
     if !out.status.success() {
         return Err(format!(
@@ -603,13 +668,50 @@ fn chat_completion(cfg: &AiConfig, user: &str) -> Result<String, String> {
             text.chars().take(300).collect::<String>()
         )
     })?;
-    if let Some(msg) = v.pointer("/error/message").and_then(|m| m.as_str()) {
+    // Gemini sometimes wraps the error in a list
+    if let Some(msg) = ["/error/message", "/0/error/message"]
+        .iter()
+        .find_map(|p| v.pointer(p).and_then(|m| m.as_str()))
+    {
         return Err(format!("API báo lỗi: {msg}"));
     }
-    v.pointer("/choices/0/message/content")
+    Ok(v)
+}
+
+/// One chat completion: the model's reply text.
+fn chat_completion(cfg: &AiConfig, user: &str) -> Result<String, String> {
+    let mut body = serde_json::json!({
+        "model": cfg.model.trim(),
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user},
+        ],
+    });
+    // JSON mode where the service is known to support it (custom servers may reject the field)
+    if matches!(PROVIDERS[provider_index(cfg)].id, "gemini" | "openai") {
+        body["response_format"] = serde_json::json!({"type": "json_object"});
+    }
+    call_api(cfg, "chat/completions", Some(&body))?
+        .pointer("/choices/0/message/content")
         .and_then(|c| c.as_str())
         .map(str::to_string)
         .ok_or_else(|| "API không trả về nội dung (choices[0].message.content).".to_string())
+}
+
+/// The models the key can use (checks the key and the URL at the same time).
+fn list_models(cfg: &AiConfig) -> Result<Vec<String>, String> {
+    let v = call_api(cfg, "models", None)?;
+    let mut models: Vec<String> = v
+        .pointer("/data")
+        .and_then(|d| d.as_array())
+        .ok_or_else(|| "API không trả về danh sách model.".to_string())?
+        .iter()
+        .filter_map(|m| m.get("id")?.as_str())
+        // Gemini lists "models/gemini-2.5-flash" but expects "gemini-2.5-flash"
+        .map(|id| id.trim_start_matches("models/").to_string())
+        .collect();
+    models.sort();
+    Ok(models)
 }
 
 mod imp {
@@ -619,9 +721,23 @@ mod imp {
     #[template(resource = "/com/github/flxzt/rnote/ui/aimenu.ui")]
     pub(crate) struct RnAiMenu {
         #[template_child]
-        pub(crate) menubutton: TemplateChild<MenuButton>,
+        pub(crate) panel: TemplateChild<gtk4::Box>,
         #[template_child]
-        pub(crate) popover: TemplateChild<Popover>,
+        pub(crate) header: TemplateChild<gtk4::Box>,
+        #[template_child]
+        pub(crate) close_button: TemplateChild<Button>,
+        #[template_child]
+        pub(crate) bubble: TemplateChild<Button>,
+        #[template_child]
+        pub(crate) provider_dropdown: TemplateChild<gtk4::DropDown>,
+        #[template_child]
+        pub(crate) key_hint_label: TemplateChild<Label>,
+        #[template_child]
+        pub(crate) model_menubutton: TemplateChild<gtk4::MenuButton>,
+        #[template_child]
+        pub(crate) animate_check: TemplateChild<gtk4::CheckButton>,
+        #[template_child]
+        pub(crate) test_button: TemplateChild<Button>,
         #[template_child]
         pub(crate) base_url_entry: TemplateChild<Entry>,
         #[template_child]
@@ -651,8 +767,8 @@ mod imp {
         pub(crate) appwindow: RefCell<Option<glib::WeakRef<RnAppWindow>>>,
         /// Bumped by every point pick, so a stale 3 s timeout does not cancel a newer pick
         pub(crate) pick_generation: Cell<u32>,
-        /// Bubble margins (end, bottom) when a drag started
-        pub(crate) drag_origin: Cell<(i32, i32)>,
+        /// Margins (end, bottom) and pointer position in the parent when a drag started
+        pub(crate) drag_origin: Cell<(i32, i32, f64, f64)>,
     }
 
     #[glib::object_subclass]
@@ -673,8 +789,25 @@ mod imp {
     impl ObjectImpl for RnAiMenu {
         fn constructed(&self) {
             self.parent_constructed();
-            self.menubutton.get().set_popover(Some(&self.popover.get()));
-            self.setup_drag();
+            self.setup_drag(&self.bubble.get().upcast());
+            self.setup_drag(&self.header.get().upcast());
+            let obj = self.obj();
+            let w = obj.downgrade();
+            self.bubble.get().connect_clicked(move |_| {
+                if let Some(o) = w.upgrade() {
+                    if o.imp().panel.is_visible() {
+                        o.close_menu();
+                    } else {
+                        o.open_menu();
+                    }
+                }
+            });
+            let w = obj.downgrade();
+            self.close_button.get().connect_clicked(move |_| {
+                if let Some(o) = w.upgrade() {
+                    o.close_menu();
+                }
+            });
         }
 
         fn dispose(&self) {
@@ -688,22 +821,37 @@ mod imp {
     impl WidgetImpl for RnAiMenu {}
 
     impl RnAiMenu {
-        /// Drag the bubble around the board (assistive-touch style). A short press still opens
-        /// the chat: the drag only claims the gesture after the pointer moved a few pixels.
-        fn setup_drag(&self) {
-            let obj = self.obj();
+        /// Drag the assistant around the board (assistive-touch style) by its bubble or panel header.
+        /// A short press still clicks: the drag only claims the gesture after the pointer moved a few pixels.
+        /// Positions are measured in the parent: the widget moves under the pointer, so its own
+        /// coordinates would feed the movement back and make it jitter in place.
+        fn setup_drag(&self, handle: &Widget) {
             let drag = gtk4::GestureDrag::new();
             drag.set_propagation_phase(gtk4::PropagationPhase::Capture);
             let claimed = std::rc::Rc::new(Cell::new(false));
-            let w = obj.downgrade();
+            let pointer_in_parent =
+                |o: &super::RnAiMenu, g: &gtk4::GestureDrag, dx: f64, dy: f64| {
+                    let (x, y) = g.start_point()?;
+                    let handle = g.widget()?;
+                    let parent = o.parent()?;
+                    let p = gtk4::graphene::Point::new((x + dx) as f32, (y + dy) as f32);
+                    handle
+                        .compute_point(&parent, &p)
+                        .map(|p| (p.x() as f64, p.y() as f64))
+                };
+            let w = self.obj().downgrade();
             let c = claimed.clone();
-            drag.connect_drag_begin(move |_, _, _| {
+            drag.connect_drag_begin(move |g, _, _| {
                 c.set(false);
-                if let Some(o) = w.upgrade() {
-                    o.imp().drag_origin.set((o.margin_end(), o.margin_bottom()));
+                if let Some(o) = w.upgrade()
+                    && let Some((px, py)) = pointer_in_parent(&o, g, 0.0, 0.0)
+                {
+                    o.imp()
+                        .drag_origin
+                        .set((o.margin_end(), o.margin_bottom(), px, py));
                 }
             });
-            let w = obj.downgrade();
+            let w = self.obj().downgrade();
             drag.connect_drag_update(move |g, dx, dy| {
                 let Some(o) = w.upgrade() else { return };
                 if !claimed.get() {
@@ -713,16 +861,13 @@ mod imp {
                     claimed.set(true);
                     g.set_state(gtk4::EventSequenceState::Claimed);
                 }
-                let (end, bottom) = o.imp().drag_origin.get();
-                let (pw, ph) = o
-                    .parent()
-                    .map(|p| (p.width(), p.height()))
-                    .unwrap_or((i32::MAX, i32::MAX));
-                let (w, h) = (o.width(), o.height());
-                o.set_margin_end((end - dx as i32).clamp(0, (pw - w).max(0)));
-                o.set_margin_bottom((bottom - dy as i32).clamp(0, (ph - h).max(0)));
+                let Some((px, py)) = pointer_in_parent(&o, g, dx, dy) else {
+                    return;
+                };
+                let (end, bottom, x0, y0) = o.imp().drag_origin.get();
+                o.set_margins_clamped(end - (px - x0) as i32, bottom - (py - y0) as i32);
             });
-            obj.add_controller(drag);
+            handle.add_controller(drag);
         }
     }
 }
@@ -745,8 +890,29 @@ impl RnAiMenu {
     }
 
     pub(crate) fn open_menu(&self) {
-        self.imp().popover.popup();
-        self.imp().prompt_view.grab_focus();
+        let imp = self.imp();
+        imp.panel.set_visible(true);
+        self.update_center_status();
+        imp.prompt_view.grab_focus();
+        // The panel makes the widget bigger: keep all of it inside the window once it is laid out
+        let w = self.downgrade();
+        glib::idle_add_local_once(move || {
+            if let Some(o) = w.upgrade() {
+                o.set_margins_clamped(o.margin_end(), o.margin_bottom());
+            }
+        });
+    }
+
+    /// Move the assistant, keeping it fully inside its parent.
+    fn set_margins_clamped(&self, end: i32, bottom: i32) {
+        let (pw, ph) = self
+            .parent()
+            .map(|p| (p.width(), p.height()))
+            .unwrap_or((i32::MAX, i32::MAX));
+        let (_, w, _, _) = self.measure(gtk4::Orientation::Horizontal, -1);
+        let (_, h, _, _) = self.measure(gtk4::Orientation::Vertical, w);
+        self.set_margin_end(end.clamp(0, (pw - w).max(0)));
+        self.set_margin_bottom(bottom.clamp(0, (ph - h).max(0)));
     }
 
     /// The board was tapped while the pick button waited: put the nearest point's name
@@ -766,12 +932,57 @@ impl RnAiMenu {
             .map(|(name, p)| ((p - pos).length(), name))
             .filter(|(d, _)| *d <= reach)
             .min_by(|a, b| a.0.total_cmp(&b.0));
-        let text = match nearest {
-            Some((_, name)) => format!("điểm {name} "),
-            None => format!("điểm ({:.0}, {:.0}) ", pos.x, pos.y),
+        let name = match nearest {
+            Some((_, name)) => name,
+            None => {
+                // Tapped on empty board: leave a named point there, so the mark stays visible
+                let label = canvas.engine_ref().suggest_point_label();
+                let mut fig = MathFigure::new();
+                fig.add_point(pos, Some(label.clone()));
+                let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
+                if let Some(appwindow) = self.appwindow() {
+                    appwindow.handle_widget_flags(flags, &canvas);
+                }
+                label
+            }
         };
+        self.flash_marker(&canvas, pos);
+        let text = format!("điểm {name} ");
         imp.prompt_view.buffer().insert_at_cursor(&text);
         self.open_menu();
+    }
+
+    /// A ring that pulses for a moment where the board was tapped.
+    fn flash_marker(&self, canvas: &crate::RnCanvas, pos: Vector2) {
+        let Some(appwindow) = self.appwindow() else {
+            return;
+        };
+        let overlay = appwindow.overlays().imp().toolbar_overlay.get();
+        let p = canvas.engine_ref().camera.transform().transform_point2(pos);
+        let Some((x, y)) = canvas
+            .compute_point(
+                &overlay,
+                &gtk4::graphene::Point::new(p.x as f32, p.y as f32),
+            )
+            .map(|p| (p.x(), p.y()))
+        else {
+            return;
+        };
+        const SIZE: i32 = 30;
+        let marker = gtk4::Box::builder()
+            .width_request(SIZE)
+            .height_request(SIZE)
+            .halign(gtk4::Align::Start)
+            .valign(gtk4::Align::Start)
+            .margin_start(x as i32 - SIZE / 2)
+            .margin_top(y as i32 - SIZE / 2)
+            .can_target(false)
+            .css_classes(["pick_marker"])
+            .build();
+        overlay.add_overlay(&marker);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+            overlay.remove_overlay(&marker);
+        });
     }
 
     /// Wait 3 s for one tap on the board (see `point_picked`), then give up.
@@ -803,7 +1014,7 @@ impl RnAiMenu {
     }
 
     pub(crate) fn close_menu(&self) {
-        self.imp().popover.popdown();
+        self.imp().panel.set_visible(false);
     }
 
     fn appwindow(&self) -> Option<RnAppWindow> {
@@ -840,6 +1051,113 @@ impl RnAiMenu {
             .set_markup("Chưa chọn hình hoặc tâm (Nhấn vào hình trên bảng để sửa trực tiếp)");
     }
 
+    fn config_from_ui(&self) -> AiConfig {
+        let imp = self.imp();
+        AiConfig {
+            provider: PROVIDERS
+                [(imp.provider_dropdown.selected() as usize).min(PROVIDERS.len() - 1)]
+            .id
+            .to_string(),
+            base_url: imp.base_url_entry.text().trim().to_string(),
+            model: imp.model_entry.text().trim().to_string(),
+            api_key: imp.api_key_entry.text().trim().to_string(),
+            instant_draw: !imp.animate_check.is_active(),
+        }
+    }
+
+    /// Models offered under the model field's arrow.
+    fn set_model_choices(&self, models: &[String]) {
+        let imp = self.imp();
+        let list = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        let scroller = ScrolledWindow::builder()
+            .child(&list)
+            .propagate_natural_height(true)
+            .max_content_height(320)
+            .hscrollbar_policy(gtk4::PolicyType::Never)
+            .build();
+        let popover = gtk4::Popover::builder().child(&scroller).build();
+        for m in models {
+            let b = Button::with_label(m);
+            b.add_css_class("flat");
+            let (entry, popover, m) = (imp.model_entry.get(), popover.clone(), m.clone());
+            b.connect_clicked(move |_| {
+                entry.set_text(&m);
+                popover.popdown();
+            });
+            list.append(&b);
+        }
+        imp.model_menubutton.set_popover(Some(&popover));
+        imp.model_menubutton.set_sensitive(!models.is_empty());
+    }
+
+    /// Provider presets fill the URL and a model; "Thử kết nối" checks the key and lists the models.
+    fn setup_providers(&self, initial: usize) {
+        let imp = self.imp();
+        let show = |this: &Self, i: usize, fill: bool| {
+            let imp = this.imp();
+            let p = &PROVIDERS[i];
+            imp.key_hint_label.set_markup(p.key_hint);
+            imp.base_url_entry.set_editable(p.id == "custom");
+            if fill && !p.base_url.is_empty() {
+                imp.base_url_entry.set_text(p.base_url);
+                let model = imp.model_entry.text();
+                if !p.models.iter().any(|m| *m == model.as_str()) {
+                    imp.model_entry.set_text(p.models[0]);
+                }
+            }
+            let models: Vec<String> = p.models.iter().map(|m| m.to_string()).collect();
+            this.set_model_choices(&models);
+        };
+        imp.provider_dropdown.set_selected(initial as u32);
+        // An empty config gets the first preset (Gemini) filled in
+        show(self, initial, imp.base_url_entry.text().is_empty());
+        let this = self.clone();
+        imp.provider_dropdown.connect_selected_notify(move |d| {
+            show(
+                &this,
+                (d.selected() as usize).min(PROVIDERS.len() - 1),
+                true,
+            );
+        });
+
+        let this = self.clone();
+        imp.test_button.connect_clicked(move |b| {
+            let cfg = this.config_from_ui();
+            if cfg.base_url.is_empty() {
+                this.append_ai_message("Chưa có Base URL.");
+                return;
+            }
+            b.set_sensitive(false);
+            let (this, b) = (this.clone(), b.clone());
+            glib::spawn_future_local(async move {
+                let model = cfg.model.clone();
+                let result = blocking::unblock(move || list_models(&cfg)).await;
+                b.set_sensitive(true);
+                match result {
+                    Ok(models) => {
+                        let found = models.iter().any(|m| *m == model);
+                        this.append_ai_message(&format!(
+                            "Kết nối được. Key dùng được <b>{}</b> model{}.",
+                            models.len(),
+                            if model.is_empty() || found {
+                                String::new()
+                            } else {
+                                format!(
+                                    " <i>Không thấy model \"{}\" trong danh sách, chọn lại ở mũi tên cạnh ô Model.</i>",
+                                    glib::markup_escape_text(&model)
+                                )
+                            }
+                        ));
+                        if !models.is_empty() {
+                            this.set_model_choices(&models);
+                        }
+                    }
+                    Err(e) => this.append_ai_message(&glib::markup_escape_text(&e)),
+                }
+            });
+        });
+    }
+
     pub(crate) fn init(&self, appwindow: &RnAppWindow) {
         let imp = self.imp();
         imp.appwindow.borrow_mut().replace(appwindow.downgrade());
@@ -848,6 +1166,8 @@ impl RnAiMenu {
         imp.base_url_entry.set_text(&config.base_url);
         imp.model_entry.set_text(&config.model);
         imp.api_key_entry.set_text(&config.api_key);
+        imp.animate_check.set_active(!config.instant_draw);
+        self.setup_providers(provider_index(&config));
 
         self.append_ai_message(
             "<b>Trợ lý Hình học AI</b>\n\
@@ -858,12 +1178,7 @@ impl RnAiMenu {
 
         let this = self.clone();
         imp.save_key_button.connect_clicked(move |_| {
-            let imp = this.imp();
-            let cfg = AiConfig {
-                base_url: imp.base_url_entry.text().trim().to_string(),
-                model: imp.model_entry.text().trim().to_string(),
-                api_key: imp.api_key_entry.text().trim().to_string(),
-            };
+            let cfg = this.config_from_ui();
             match cfg.save() {
                 Ok(()) => this.append_ai_message(&format!(
                     "Đã lưu cấu hình: <b>{}</b> · mô hình <b>{}</b>",
@@ -877,9 +1192,13 @@ impl RnAiMenu {
             }
         });
 
-        let this = self.clone();
-        imp.popover
-            .connect_show(move |_| this.update_center_status());
+        // Takes effect right away, without "Lưu"
+        imp.animate_check.connect_toggled(|c| {
+            let mut cfg = AiConfig::load();
+            cfg.instant_draw = !c.is_active();
+            let _ = cfg.save();
+        });
+
         self.update_center_status();
 
         let this = self.clone();
@@ -1005,7 +1324,12 @@ impl RnAiMenu {
     /// Axes, graphs and variation tables of a reply. Point coordinates are turned from axis
     /// units into canvas pixels so the figure lands on the drawn plane. Returns whether
     /// anything was drawn, and the formulas that could not be read.
-    fn draw_graphs(&self, geom: &mut GeometryJson, anchor: Vector2) -> (bool, Vec<String>) {
+    fn draw_graphs(
+        &self,
+        geom: &mut GeometryJson,
+        anchor: Vector2,
+        drawn: &mut Vec<StrokeKey>,
+    ) -> (bool, Vec<String>) {
         let mut warnings = Vec::new();
         let Some(appwindow) = self.appwindow() else {
             return (false, warnings);
@@ -1032,8 +1356,9 @@ impl RnAiMenu {
         let mut table_at = anchor;
         if let Some(frame) = frame {
             let fns: Vec<Function> = graphs.iter().map(|(f, _)| f.clone()).collect();
-            let flags = canvas.engine_mut().insert_graph_frame(frame, &fns);
+            let (flags, keys) = canvas.engine_mut().insert_graph_frame(frame, &fns);
             appwindow.handle_widget_flags(flags, &canvas);
+            drawn.extend(keys);
             for p in &mut geom.points {
                 let c = frame.to_canvas(p.x, p.y);
                 (p.x, p.y) = (c.x, c.y);
@@ -1048,8 +1373,9 @@ impl RnAiMenu {
             .chain(only_tables.iter());
         for f in tables {
             match canvas.engine_mut().insert_variation_table(f, table_at) {
-                Ok(flags) => {
+                Ok((flags, keys)) => {
                     appwindow.handle_widget_flags(flags, &canvas);
+                    drawn.extend(keys);
                     table_at.y += 240.0;
                     drew = true;
                 }
@@ -1057,6 +1383,32 @@ impl RnAiMenu {
             }
         }
         (drew, warnings)
+    }
+
+    /// Replay what the AI just drew (already recorded for undo) stroke by stroke, unless
+    /// "Vẽ từng nét" is off.
+    fn play_drawing(&self, keys: Vec<StrokeKey>, base: Option<MathFigure>) {
+        let Some(appwindow) = self.appwindow() else {
+            return;
+        };
+        let Some(canvas) = appwindow.active_tab_canvas() else {
+            return;
+        };
+        if keys.is_empty() || AiConfig::load().instant_draw {
+            return;
+        }
+        let (mut anim, flags) = canvas.engine_mut().draw_animation(&keys, base.as_ref());
+        appwindow.handle_widget_flags(flags, &canvas);
+        glib::spawn_future_local(async move {
+            loop {
+                glib::timeout_future(std::time::Duration::from_millis(40)).await;
+                let (more, flags) = canvas.engine_mut().draw_animation_step(&mut anim);
+                appwindow.handle_widget_flags(flags, &canvas);
+                if !more {
+                    break;
+                }
+            }
+        });
     }
 
     fn handle_user_prompt(&self, prompt: &str) {
@@ -1126,10 +1478,13 @@ impl RnAiMenu {
             };
 
             let explanation = geom.explanation.clone().unwrap_or_default();
-            let (drew_graph, graph_warnings) = this.draw_graphs(&mut geom, anchor);
+            // Everything the reply adds, replayed stroke by stroke at the end
+            let mut drawn = Vec::new();
+            let (drew_graph, graph_warnings) = this.draw_graphs(&mut geom, anchor, &mut drawn);
 
             // Case 1: Editing a clicked/selected shape in-place!
             if let Some((sel_key, _, _, mut target_fig)) = selected_target {
+                let before = target_fig.clone();
                 let warnings = apply_geometry_to_figure(&mut target_fig, &geom, &existing);
                 if let Some(appwindow) = this.appwindow()
                     && let Some(canvas) = appwindow.active_tab_canvas()
@@ -1139,6 +1494,8 @@ impl RnAiMenu {
                         .update_shape_with_figure(sel_key, target_fig);
                     appwindow.handle_widget_flags(flags, &canvas);
                     this.update_center_status();
+                    drawn.push(sel_key);
+                    this.play_drawing(drawn, Some(before));
                 }
                 let mut msg = if explanation.is_empty() {
                     "Đã cập nhật hình đang chọn.".to_string()
@@ -1196,6 +1553,7 @@ impl RnAiMenu {
                 return;
             }
             if fig.points.is_empty() && drew_graph {
+                this.play_drawing(drawn, None);
                 let mut msg = glib::markup_escape_text(&explanation).to_string();
                 if !graph_warnings.is_empty() {
                     msg.push_str(&format!(
@@ -1218,8 +1576,10 @@ impl RnAiMenu {
             if let Some(appwindow) = this.appwindow()
                 && let Some(canvas) = appwindow.active_tab_canvas()
             {
-                let flags = canvas.engine_mut().insert_shape(Shape::MathFigure(fig));
+                let (flags, key) = canvas.engine_mut().insert_shape_key(Shape::MathFigure(fig));
                 appwindow.handle_widget_flags(flags, &canvas);
+                drawn.push(key);
+                this.play_drawing(drawn, None);
             }
             let mut msg = glib::markup_escape_text(&explanation).to_string();
             if !warnings.is_empty() {

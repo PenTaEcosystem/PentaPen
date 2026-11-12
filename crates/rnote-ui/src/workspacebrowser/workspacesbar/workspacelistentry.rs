@@ -211,3 +211,23 @@ impl glib::variant::FromVariant for RnWorkspaceListEntry {
         Some(Self::new(RnWorkspaceListEntryInner::from_variant(variant)?))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Settings store the list as text (registry backend on Windows): the dir must survive it.
+    #[test]
+    fn dir_survives_settings_text_roundtrip() {
+        let inner = RnWorkspaceListEntryInner {
+            dir: PathBuf::from(r"C:\Users\me\Tài liệu"),
+            icon: String::from("folder-symbolic"),
+            color: 0,
+            name: String::from("x"),
+        };
+        let v = inner.to_variant();
+        let parsed = glib::Variant::parse(Some(&v.type_()), &v.print(true)).unwrap();
+        let back = RnWorkspaceListEntryInner::from_variant(&parsed).unwrap();
+        assert_eq!(back.dir, inner.dir);
+    }
+}

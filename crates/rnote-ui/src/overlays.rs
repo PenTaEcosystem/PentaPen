@@ -4,7 +4,7 @@ use crate::canvaswrapper::RnCanvasWrapper;
 use crate::{RnAiMenu, RnAppWindow, RnColorPicker, RnPenPicker, dialogs};
 use core::time::Duration;
 use gtk4::{
-    CompositeTemplate, Overlay, ProgressBar, ScrolledWindow, Widget, gio, glib, glib::clone,
+    CompositeTemplate, Overlay, ProgressBar, ScrolledWindow, Widget, gdk, gio, glib, glib::clone,
     prelude::*, subclass::prelude::*,
 };
 use rnote_engine::ext::GdkRGBAExt;
@@ -185,6 +185,19 @@ impl RnOverlays {
                     let Some(canvas) = appwindow.active_tab_canvas() else {
                         return;
                     };
+                    // Transparent ink (the third swatch is meant for fills) draws invisible
+                    // lines, circles and points: use a visible ink instead.
+                    if colorpicker.stroke_color().alpha() < 0.05 {
+                        let bg = canvas.engine_ref().document.config.background.color;
+                        let c = if bg.r + bg.g + bg.b > 1.5 { 0.0 } else { 1.0 };
+                        appwindow.overlays().dispatch_toast_text(
+                            "Màu trong suốt chỉ dùng cho màu tô, nét vẽ sẽ không thấy được. Đã giữ mực nhìn thấy được.",
+                            None,
+                        );
+                        // Comes back here with the visible color
+                        colorpicker.set_stroke_color(gdk::RGBA::new(c, c, c, 1.0));
+                        return;
+                    }
                     let stroke_color = colorpicker.stroke_color().into_compose_color();
                     let current_pen_style = canvas.engine_ref().current_pen_style_w_override();
 

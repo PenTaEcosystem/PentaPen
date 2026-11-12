@@ -437,7 +437,7 @@ pub(crate) fn match_ink_to_board(appwindow: &RnAppWindow) {
     let colorpicker = appwindow.overlays().colorpicker();
     let ink = colorpicker.stroke_color();
     let light_ink = ink.red() + ink.green() + ink.blue() > 1.5;
-    if light_board == light_ink {
+    if light_board == light_ink || ink.alpha() < 0.05 {
         let c = if light_board { 0.0 } else { 1.0 };
         colorpicker.set_stroke_color(rgba(c, c, c));
     }

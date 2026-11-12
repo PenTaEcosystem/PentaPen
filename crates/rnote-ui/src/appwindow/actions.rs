@@ -954,6 +954,7 @@ impl RnAppWindow {
             #[weak(rename_to=appwindow)]
             self,
             move |_, _| {
+                appwindow.overlays().aimenu().finish_drawing();
                 glib::spawn_future_local(clone!(
                     #[weak]
                     appwindow,
@@ -990,6 +991,7 @@ impl RnAppWindow {
             #[weak(rename_to=appwindow)]
             self,
             move |_, _| {
+                appwindow.overlays().aimenu().finish_drawing();
                 glib::spawn_future_local(clone!(
                     #[weak]
                     appwindow,
@@ -1148,6 +1150,7 @@ impl RnAppWindow {
 
         // Clipboard copy
         action_clipboard_copy.connect_activate(clone!(#[weak(rename_to=appwindow)] self, move |_, _| {
+            appwindow.overlays().aimenu().finish_drawing();
             glib::spawn_future_local(clone!(#[weak] appwindow, async move {
                 let Some(canvas) = appwindow.active_tab_canvas()
                 else {
@@ -1180,6 +1183,7 @@ impl RnAppWindow {
 
         // Clipboard cut
         action_clipboard_cut.connect_activate(clone!(#[weak(rename_to=appwindow)] self, move |_, _| {
+            appwindow.overlays().aimenu().finish_drawing();
             glib::spawn_future_local(clone!(#[weak] appwindow, async move {
                 let Some(canvas) = appwindow.active_tab_canvas()
                 else {

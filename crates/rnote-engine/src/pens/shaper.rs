@@ -1,7 +1,8 @@
 // Imports
 use super::PenBehaviour;
 use super::PenStyle;
-use crate::engine::{EngineView, EngineViewMut};
+use crate::engine::{EngineView, EngineViewMut, StrokeContent};
+use futures::channel::oneshot;
 use crate::pens::pensconfig::ShaperConfig;
 use crate::store::StrokeKey;
 use crate::strokes::ShapeStroke;
@@ -362,6 +363,44 @@ impl PenBehaviour for Shaper {
 
     fn update_state(&mut self, _engine_view: &mut EngineViewMut) -> WidgetFlags {
         WidgetFlags::default()
+    }
+
+    /// Ctrl+C on a selected figure copies it, like the selector does.
+    fn fetch_clipboard_content(
+        &self,
+        engine_view: &EngineView,
+    ) -> oneshot::Receiver<anyhow::Result<(Vec<(Vec<u8>, String)>, WidgetFlags)>> {
+        let content = match &self.state {
+            ShaperState::Manipulating { selected, .. } => Some(
+                engine_view
+                    .store
+                    .fetch_stroke_content(&[selected.key]),
+            ),
+            _ => None,
+        };
+        clipboard_content(content, WidgetFlags::default())
+    }
+
+    /// Ctrl+X on a selected figure: copy it, then remove it (undo brings it back).
+    fn cut_clipboard_content(
+        &mut self,
+        engine_view: &mut EngineViewMut,
+    ) -> oneshot::Receiver<anyhow::Result<(Vec<(Vec<u8>, String)>, WidgetFlags)>> {
+        let mut widget_flags = WidgetFlags::default();
+        let content = match &self.state {
+            ShaperState::Manipulating { selected, .. } => {
+                let c = engine_view.store.cut_stroke_content(&[selected.key]);
+                self.state = ShaperState::Idle;
+                self.hovered_stroke = None;
+                self.active_snap = None;
+                widget_flags |= engine_view.store.record(Instant::now());
+                widget_flags.store_modified = true;
+                widget_flags.redraw = true;
+                Some(c)
+            }
+            _ => None,
+        };
+        clipboard_content(content, widget_flags)
     }
 
     fn handle_event(
@@ -1634,6 +1673,40 @@ fn propagate_intersections_to_existing_strokes(
             );
         }
     }
+}
+
+/// The clipboard formats of copied strokes (Rnote strokes, Svg, Png), made off the main thread.
+#[allow(clippy::type_complexity)]
+fn clipboard_content(
+    content: Option<StrokeContent>,
+    widget_flags: WidgetFlags,
+) -> oneshot::Receiver<anyhow::Result<(Vec<(Vec<u8>, String)>, WidgetFlags)>> {
+    let (sender, receiver) = oneshot::channel();
+    rayon::spawn(move || {
+        let result = move || {
+            let mut out = Vec::new();
+            if let Some(content) = content {
+                let svg =
+                    content.gen_svg(false, false, false, StrokeContent::CLIPBOARD_EXPORT_MARGIN)?;
+                out.push((
+                    serde_json::to_string(&content)?.into_bytes(),
+                    StrokeContent::MIME_TYPE.to_string(),
+                ));
+                if let Some(svg) = svg {
+                    let png = svg
+                        .gen_image(crate::Engine::STROKE_EXPORT_IMAGE_SCALE)?
+                        .into_encoded_bytes(image::ImageFormat::Png, None)?;
+                    out.push((svg.to_document().into_bytes(), crate::Svg::MIME_TYPE.to_string()));
+                    out.push((png, String::from("image/png")));
+                }
+            }
+            Ok((out, widget_flags))
+        };
+        if sender.send(result()).is_err() {
+            tracing::error!("Sending shaper clipboard content failed, receiver already dropped.");
+        }
+    });
+    receiver
 }
 
 fn shortcut_builder_type(key: KeyboardKey) -> Option<ShapeBuilderType> {

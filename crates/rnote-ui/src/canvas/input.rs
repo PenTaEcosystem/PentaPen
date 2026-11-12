@@ -295,7 +295,16 @@ pub(crate) fn handle_pointer_controller_event(
                 PenState::Proximity => {
                     canvas.enable_drawing_cursor(false);
 
-                    if canvas.is_picking_center() || canvas.is_picking_ai_point() {
+                    if canvas.is_picking_ai_point() {
+                        if let Some(appwindow) = canvas
+                            .root()
+                            .and_then(|r| r.downcast::<crate::RnAppWindow>().ok())
+                        {
+                            appwindow.overlays().aimenu().move_pick_marker(element.pos);
+                        }
+                        return (glib::Propagation::Stop, pen_state, stylus_active);
+                    }
+                    if canvas.is_picking_center() {
                         return (glib::Propagation::Stop, pen_state, stylus_active);
                     }
 
@@ -314,8 +323,22 @@ pub(crate) fn handle_pointer_controller_event(
                     canvas.grab_focus();
                     canvas.enable_drawing_cursor(true);
 
-                    if canvas.is_picking_center() || canvas.is_picking_ai_point() {
+                    let appwindow = canvas
+                        .root()
+                        .and_then(|r| r.downcast::<crate::RnAppWindow>().ok());
+                    if canvas.is_picking_ai_point() {
+                        // The ring follows the finger, the point is taken on release
+                        if let Some(appwindow) = &appwindow {
+                            appwindow.overlays().aimenu().move_pick_marker(element.pos);
+                        }
                         return (glib::Propagation::Stop, pen_state, stylus_active);
+                    }
+                    if canvas.is_picking_center() {
+                        return (glib::Propagation::Stop, pen_state, stylus_active);
+                    }
+                    // Whatever the press does, it works on the whole AI drawing, not a half drawn one
+                    if let Some(appwindow) = &appwindow {
+                        appwindow.overlays().aimenu().finish_drawing();
                     }
 
                     let (ep, wf) = canvas.engine_mut().handle_pen_event(
@@ -353,9 +376,19 @@ pub(crate) fn handle_key_controller_key_pressed(
     canvas.grab_focus();
 
     let now = Instant::now();
+    let appwindow = canvas
+        .root()
+        .and_then(|r| r.downcast::<crate::RnAppWindow>().ok());
     if gdk_key == gdk::Key::Escape && canvas.is_picking_ai_point() {
         canvas.set_picking_ai_point(false);
+        if let Some(appwindow) = &appwindow {
+            appwindow.overlays().aimenu().hide_pick_marker();
+        }
         return glib::Propagation::Stop;
+    }
+    // Shortcuts (copy, delete, save, ...) work on the whole AI drawing, not a half drawn one
+    if let Some(appwindow) = &appwindow {
+        appwindow.overlays().aimenu().finish_drawing();
     }
     if gdk_key == gdk::Key::Escape && canvas.is_picking_center() {
         canvas.set_picking_center(false);

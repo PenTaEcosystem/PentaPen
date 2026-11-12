@@ -12,6 +12,7 @@ use rnote_engine::graph::{Function, GraphFrame};
 use rnote_engine::store::StrokeKey;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// Connection to an OpenAI-compatible chat completions API (Gemini, OpenAI, a proxy, a custom server).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
@@ -765,8 +766,13 @@ mod imp {
         #[template_child]
         pub(crate) send_button: TemplateChild<Button>,
         pub(crate) appwindow: RefCell<Option<glib::WeakRef<RnAppWindow>>>,
-        /// Bumped by every point pick, so a stale 3 s timeout does not cancel a newer pick
+        /// Bumped by every point pick, so a stale timeout does not cancel a newer pick
         pub(crate) pick_generation: Cell<u32>,
+        /// The ring that follows the finger while a point is being picked
+        pub(crate) pick_marker: RefCell<Option<gtk4::Box>>,
+        /// The drawing being played (see `play_drawing`), finished at once when the user acts
+        pub(crate) drawing:
+            Rc<RefCell<Option<(crate::RnCanvas, rnote_engine::engine::DrawAnimation)>>>,
         /// Margins (end, bottom) and pointer position in the parent when a drag started
         pub(crate) drag_origin: Cell<(i32, i32, f64, f64)>,
     }
@@ -921,6 +927,7 @@ impl RnAiMenu {
         let imp = self.imp();
         imp.pick_generation
             .set(imp.pick_generation.get().wrapping_add(1));
+        self.hide_pick_marker();
         let Some(canvas) = self.appwindow().and_then(|w| w.active_tab_canvas()) else {
             return;
         };
@@ -952,41 +959,78 @@ impl RnAiMenu {
         self.open_menu();
     }
 
-    /// A ring that pulses for a moment where the board was tapped.
+    /// A marker ring at the board position `pos`, placed in the toolbar overlay.
+    fn marker_at(&self, canvas: &crate::RnCanvas, pos: Vector2) -> Option<gtk4::Box> {
+        const SIZE: i32 = 30;
+        let appwindow = self.appwindow()?;
+        let overlay = appwindow.overlays().imp().toolbar_overlay.get();
+        let p = canvas.engine_ref().camera.transform().transform_point2(pos);
+        let p = canvas.compute_point(
+            &overlay,
+            &gtk4::graphene::Point::new(p.x as f32, p.y as f32),
+        )?;
+        let marker = self.imp().pick_marker.borrow().clone().unwrap_or_else(|| {
+            gtk4::Box::builder()
+                .width_request(SIZE)
+                .height_request(SIZE)
+                .halign(gtk4::Align::Start)
+                .valign(gtk4::Align::Start)
+                .can_target(false)
+                .css_classes(["pick_marker"])
+                .build()
+        });
+        marker.set_margin_start(p.x() as i32 - SIZE / 2);
+        marker.set_margin_top(p.y() as i32 - SIZE / 2);
+        if marker.parent().is_none() {
+            overlay.add_overlay(&marker);
+        }
+        Some(marker)
+    }
+
+    /// While picking: the ring follows the finger or pen, the point is taken where it is let go.
+    pub(crate) fn move_pick_marker(&self, pos: Vector2) {
+        let Some(canvas) = self.appwindow().and_then(|w| w.active_tab_canvas()) else {
+            return;
+        };
+        // Pressing keeps the pick alive, however long the finger takes to get there
+        self.imp()
+            .pick_generation
+            .set(self.imp().pick_generation.get().wrapping_add(1));
+        let marker = self.marker_at(&canvas, pos);
+        self.imp().pick_marker.replace(marker);
+    }
+
+    pub(crate) fn hide_pick_marker(&self) {
+        if let Some(marker) = self.imp().pick_marker.take()
+            && let Some(appwindow) = self.appwindow()
+        {
+            appwindow
+                .overlays()
+                .imp()
+                .toolbar_overlay
+                .get()
+                .remove_overlay(&marker);
+        }
+    }
+
+    /// A ring that stays for a moment where the point was picked.
     fn flash_marker(&self, canvas: &crate::RnCanvas, pos: Vector2) {
+        let Some(marker) = self.marker_at(canvas, pos) else {
+            return;
+        };
         let Some(appwindow) = self.appwindow() else {
             return;
         };
         let overlay = appwindow.overlays().imp().toolbar_overlay.get();
-        let p = canvas.engine_ref().camera.transform().transform_point2(pos);
-        let Some((x, y)) = canvas
-            .compute_point(
-                &overlay,
-                &gtk4::graphene::Point::new(p.x as f32, p.y as f32),
-            )
-            .map(|p| (p.x(), p.y()))
-        else {
-            return;
-        };
-        const SIZE: i32 = 30;
-        let marker = gtk4::Box::builder()
-            .width_request(SIZE)
-            .height_request(SIZE)
-            .halign(gtk4::Align::Start)
-            .valign(gtk4::Align::Start)
-            .margin_start(x as i32 - SIZE / 2)
-            .margin_top(y as i32 - SIZE / 2)
-            .can_target(false)
-            .css_classes(["pick_marker"])
-            .build();
-        overlay.add_overlay(&marker);
         glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
             overlay.remove_overlay(&marker);
         });
     }
 
-    /// Wait 3 s for one tap on the board (see `point_picked`), then give up.
+    /// Wait for one press on the board (see `point_picked`): the ring follows the finger
+    /// until it is let go. Gives up after a while without any press.
     fn start_point_pick(&self) {
+        const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
         let Some(appwindow) = self.appwindow() else {
             return;
         };
@@ -999,16 +1043,17 @@ impl RnAiMenu {
         canvas.set_picking_ai_point(true);
         self.close_menu();
         appwindow.overlays().dispatch_toast_text(
-            "Chạm vào một điểm trên bảng (3 giây)…",
-            Some(std::time::Duration::from_secs(3)),
+            "Nhấn vào bảng, kéo đến vị trí mong muốn rồi thả tay (Esc để huỷ).",
+            Some(WAIT),
         );
         let this = self.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+        glib::timeout_add_local_once(WAIT, move || {
             if this.imp().pick_generation.get() != generation || !canvas.is_picking_ai_point() {
                 return;
             }
             canvas.set_picking_ai_point(false);
-            this.append_ai_message("Hết 3 giây, chưa chọn điểm nào.");
+            this.hide_pick_marker();
+            this.append_ai_message("Hết thời gian, chưa chọn điểm nào.");
             this.open_menu();
         });
     }
@@ -1397,18 +1442,43 @@ impl RnAiMenu {
         if keys.is_empty() || AiConfig::load().instant_draw {
             return;
         }
-        let (mut anim, flags) = canvas.engine_mut().draw_animation(&keys, base.as_ref());
+        self.finish_drawing();
+        let (anim, flags) = canvas.engine_mut().draw_animation(&keys, base.as_ref());
         appwindow.handle_widget_flags(flags, &canvas);
+        let slot = self.imp().drawing.clone();
+        slot.replace(Some((canvas.clone(), anim)));
         glib::spawn_future_local(async move {
             loop {
                 glib::timeout_future(std::time::Duration::from_millis(40)).await;
-                let (more, flags) = canvas.engine_mut().draw_animation_step(&mut anim);
+                let mut slot = slot.borrow_mut();
+                // Finished early (the user started doing something), or a newer drawing took over
+                let Some((c, anim)) = slot.as_mut() else { break };
+                if *c != canvas {
+                    break;
+                }
+                let (more, flags) = canvas.engine_mut().draw_animation_step(anim);
+                if !more {
+                    *slot = None;
+                }
+                drop(slot);
                 appwindow.handle_widget_flags(flags, &canvas);
                 if !more {
                     break;
                 }
             }
         });
+    }
+
+    /// Show the rest of a drawing being played at once, so nothing the user does (drawing,
+    /// moving a point, copying, saving) sees a half drawn figure.
+    pub(crate) fn finish_drawing(&self) {
+        let Some((canvas, mut anim)) = self.imp().drawing.take() else {
+            return;
+        };
+        let flags = canvas.engine_mut().draw_animation_finish(&mut anim);
+        if let Some(appwindow) = self.appwindow() {
+            appwindow.handle_widget_flags(flags, &canvas);
+        }
     }
 
     fn handle_user_prompt(&self, prompt: &str) {

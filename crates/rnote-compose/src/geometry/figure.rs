@@ -117,6 +117,10 @@ impl MathFigure {
 
     /// Add a right angle visual glyph at vertex between arm1 and arm2.
     pub fn add_right_angle(&mut self, vertex: PointId, arm1: PointId, arm2: PointId, size: f64) {
+        // Degenerate (a foot landing on a vertex) or already marked: nothing to draw
+        if vertex == arm1 || vertex == arm2 || self.right_angles.iter().any(|m| m.vertex == vertex) {
+            return;
+        }
         self.right_angles.push(RightAngleMark {
             vertex,
             arm1,
@@ -171,6 +175,42 @@ impl MathFigure {
         (pa, pb, pc, lab, lbc, lca)
     }
 
+    /// A constructed point; reuses a visible point already at that spot (e.g. the orthocenter of a
+    /// right triangle is its right-angle vertex), so points and lines are not stacked twice.
+    fn derived_point(&mut self, pos: Vector2, label: Option<String>, how: Derivation) -> PointId {
+        let existing = self
+            .points
+            .values()
+            // Two different names (M and O asked for separately) both stay
+            .find(|p| {
+                p.visible
+                    && (p.pos - pos).length() <= 0.5
+                    && (p.label.is_none() || label.is_none() || p.label == label)
+            })
+            .map(|p| p.id);
+        if let Some(id) = existing {
+            let pt = self.points.get_mut(&id).unwrap();
+            if pt.label.is_none() {
+                pt.label = label;
+            }
+            return id;
+        }
+        let id = self.add_point(pos, label);
+        self.derive(id, how);
+        id
+    }
+
+    /// A dashed construction line, skipped when it would be a point or repeat an existing line.
+    fn aux_line_once(&mut self, p1: PointId, p2: PointId, line_type: LineType) {
+        let exists = self
+            .lines
+            .values()
+            .any(|l| (l.p1 == p1 && l.p2 == p2) || (l.p1 == p2 && l.p2 == p1));
+        if p1 != p2 && !exists {
+            self.add_auxiliary_line(p1, p2, line_type);
+        }
+    }
+
     /// Helper: Construct one of the 4 special triangle centers (G, H, O, I) with auxiliary lines.
     pub fn add_triangle_center(
         &mut self,
@@ -188,25 +228,20 @@ impl MathFigure {
         match center_type {
             TriangleCenterType::Centroid => {
                 let g_pos = tri.centroid();
-                let g_id = self.add_point(g_pos, Some("G".to_string()));
-                self.derive(g_id, Derivation::Center { kind: center_type, a: a_id, b: b_id, c: c_id });
+                let g_id = self.derived_point(g_pos, Some("G".to_string()), Derivation::Center { kind: center_type, a: a_id, b: b_id, c: c_id });
                 if add_auxiliary_lines {
-                    let m_bc = self.add_point(tri.midpoint_bc(), None);
-                    let m_ca = self.add_point(tri.midpoint_ca(), None);
-                    let m_ab = self.add_point(tri.midpoint_ab(), None);
-                    self.derive(m_bc, Derivation::Midpoint { a: b_id, b: c_id });
-                    self.derive(m_ca, Derivation::Midpoint { a: c_id, b: a_id });
-                    self.derive(m_ab, Derivation::Midpoint { a: a_id, b: b_id });
-                    self.add_auxiliary_line(a_id, m_bc, LineType::Segment);
-                    self.add_auxiliary_line(b_id, m_ca, LineType::Segment);
-                    self.add_auxiliary_line(c_id, m_ab, LineType::Segment);
+                    let m_bc = self.derived_point(tri.midpoint_bc(), None, Derivation::Midpoint { a: b_id, b: c_id });
+                    let m_ca = self.derived_point(tri.midpoint_ca(), None, Derivation::Midpoint { a: c_id, b: a_id });
+                    let m_ab = self.derived_point(tri.midpoint_ab(), None, Derivation::Midpoint { a: a_id, b: b_id });
+                    self.aux_line_once(a_id, m_bc, LineType::Segment);
+                    self.aux_line_once(b_id, m_ca, LineType::Segment);
+                    self.aux_line_once(c_id, m_ab, LineType::Segment);
                 }
                 Some(g_id)
             }
             TriangleCenterType::Circumcenter => {
                 let o_pos = tri.circumcenter()?;
-                let o_id = self.add_point(o_pos, Some("O".to_string()));
-                self.derive(o_id, Derivation::Center { kind: center_type, a: a_id, b: b_id, c: c_id });
+                let o_id = self.derived_point(o_pos, Some("O".to_string()), Derivation::Center { kind: center_type, a: a_id, b: b_id, c: c_id });
                 if tri.circumradius().is_some() {
                     // Through A, so the circle keeps passing through the vertices
                     let id = self.add_circle_through(o_id, a_id);
@@ -216,19 +251,16 @@ impl MathFigure {
             }
             TriangleCenterType::Orthocenter => {
                 let h_pos = tri.orthocenter()?;
-                let h_id = self.add_point(h_pos, Some("H".to_string()));
-                self.derive(h_id, Derivation::Center { kind: center_type, a: a_id, b: b_id, c: c_id });
+                let h_id = self.derived_point(h_pos, Some("H".to_string()), Derivation::Center { kind: center_type, a: a_id, b: b_id, c: c_id });
                 if add_auxiliary_lines {
                     if let Some(fa) = tri.altitude_foot_a() {
-                        let fa_id = self.add_point(fa, None);
-                        self.derive(fa_id, Derivation::Foot { p: a_id, a: b_id, b: c_id });
-                        self.add_auxiliary_line(a_id, fa_id, LineType::Segment);
+                        let fa_id = self.derived_point(fa, None, Derivation::Foot { p: a_id, a: b_id, b: c_id });
+                        self.aux_line_once(a_id, fa_id, LineType::Segment);
                         self.add_right_angle(fa_id, a_id, c_id, 8.0);
                     }
                     if let Some(fb) = tri.altitude_foot_b() {
-                        let fb_id = self.add_point(fb, None);
-                        self.derive(fb_id, Derivation::Foot { p: b_id, a: c_id, b: a_id });
-                        self.add_auxiliary_line(b_id, fb_id, LineType::Segment);
+                        let fb_id = self.derived_point(fb, None, Derivation::Foot { p: b_id, a: c_id, b: a_id });
+                        self.aux_line_once(b_id, fb_id, LineType::Segment);
                         self.add_right_angle(fb_id, b_id, a_id, 8.0);
                     }
                 }
@@ -236,8 +268,7 @@ impl MathFigure {
             }
             TriangleCenterType::Incenter => {
                 let i_pos = tri.incenter()?;
-                let i_id = self.add_point(i_pos, Some("I".to_string()));
-                self.derive(i_id, Derivation::Center { kind: center_type, a: a_id, b: b_id, c: c_id });
+                let i_id = self.derived_point(i_pos, Some("I".to_string()), Derivation::Center { kind: center_type, a: a_id, b: b_id, c: c_id });
                 if tri.inradius().is_some() {
                     // Through the (hidden) touching point on BC, so the radius follows the triangle
                     let t = Triangle::new(i_pos, b, c).altitude_foot_a().unwrap_or(i_pos);
@@ -249,14 +280,12 @@ impl MathFigure {
                 }
                 if add_auxiliary_lines {
                     if let Some(da) = tri.bisector_foot_a() {
-                        let da_id = self.add_point(da, None);
-                        self.derive(da_id, Derivation::BisectorFoot { a: a_id, b: b_id, c: c_id });
-                        self.add_auxiliary_line(a_id, da_id, LineType::Segment);
+                        let da_id = self.derived_point(da, None, Derivation::BisectorFoot { a: a_id, b: b_id, c: c_id });
+                        self.aux_line_once(a_id, da_id, LineType::Segment);
                     }
                     if let Some(db) = tri.bisector_foot_b() {
-                        let db_id = self.add_point(db, None);
-                        self.derive(db_id, Derivation::BisectorFoot { a: b_id, b: c_id, c: a_id });
-                        self.add_auxiliary_line(b_id, db_id, LineType::Segment);
+                        let db_id = self.derived_point(db, None, Derivation::BisectorFoot { a: b_id, b: c_id, c: a_id });
+                        self.aux_line_once(b_id, db_id, LineType::Segment);
                     }
                 }
                 Some(i_id)

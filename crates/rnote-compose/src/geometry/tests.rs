@@ -339,3 +339,28 @@ fn test_split_segments_at_intersection_allows_dragging_crossing() {
     assert!((x - p(c)).perp_dot(p(d) - p(c)).abs() < 1e-6);
     assert!((x - Vector2::new(50.0, 15.0)).length() < 1e-6);
 }
+
+#[test]
+fn right_triangle_centers_do_not_stack_points() {
+    // Right angle at A: H is A, O is the midpoint of BC, the feet from B and C land on A
+    let mut f = MathFigure::new();
+    let a = f.add_point(Vector2::new(0.0, 0.0), None);
+    let b = f.add_point(Vector2::new(60.0, 0.0), None);
+    let c = f.add_point(Vector2::new(0.0, 80.0), None);
+    for kind in [
+        TriangleCenterType::Centroid,
+        TriangleCenterType::Circumcenter,
+        TriangleCenterType::Orthocenter,
+        TriangleCenterType::Incenter,
+    ] {
+        f.add_triangle_center(a, b, c, kind, true);
+    }
+    let pts: Vec<_> = f.points.values().filter(|p| p.visible).collect();
+    for (i, p) in pts.iter().enumerate() {
+        for q in &pts[i + 1..] {
+            assert!((p.pos - q.pos).length() > 0.5, "stacked points at {:?}", p.pos);
+        }
+    }
+    assert_eq!(f.points[&a].label.as_deref(), Some("H"));
+    assert!(f.lines.values().all(|l| l.p1 != l.p2));
+}

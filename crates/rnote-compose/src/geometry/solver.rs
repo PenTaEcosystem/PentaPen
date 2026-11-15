@@ -106,6 +106,23 @@ impl Constraint {
         }
     }
 
+    /// The points this constraint ties, to rename them (e.g. when merging figures).
+    pub fn points_mut(&mut self) -> Vec<&mut PointId> {
+        match self {
+            Self::Coincident { p1, p2, .. }
+            | Self::Distance { p1, p2, .. }
+            | Self::Horizontal { p1, p2, .. }
+            | Self::Vertical { p1, p2, .. } => vec![p1, p2],
+            Self::EqualLength { p1, p2, p3, p4, .. }
+            | Self::Perpendicular { p1, p2, p3, p4, .. }
+            | Self::Parallel { p1, p2, p3, p4, .. } => vec![p1, p2, p3, p4],
+            Self::PointOnLine { p, a, b, .. } => vec![p, a, b],
+            Self::PointOnCircle { p, center, .. } => vec![p, center],
+            Self::TangentLineCircle { a, b, center, .. } => vec![a, b, center],
+            Self::PinPoint { point, .. } => vec![point],
+        }
+    }
+
     /// Whether this constraint is a soft guide constraint (like dragging)
     pub fn is_soft(&self) -> bool {
         matches!(self, Self::PinPoint { .. })

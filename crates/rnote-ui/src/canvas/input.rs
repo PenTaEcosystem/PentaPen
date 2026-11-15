@@ -487,6 +487,11 @@ pub(crate) fn open_point_editor(canvas: &RnCanvas, x: f64, y: f64) {
     };
     let Some((key, id, label, pos)) = canvas.engine_ref().figure_point_at(doc_pos, tolerance)
     else {
+        // Not on a point: on a segment, offer to split it into equal parts
+        let segment = canvas.engine_ref().figure_segment_at(doc_pos, tolerance);
+        if let Some((key, line)) = segment {
+            open_segment_splitter(canvas, x, y, key, line);
+        }
         return;
     };
 
@@ -572,6 +577,90 @@ pub(crate) fn open_point_editor(canvas: &RnCanvas, x: f64, y: f64) {
     popover.popup();
     name.grab_focus();
     name.select_region(0, -1);
+}
+
+/// Double-click on a segment: split it into equal parts with unnamed points (off until ticked).
+fn open_segment_splitter(
+    canvas: &RnCanvas,
+    x: f64,
+    y: f64,
+    key: rnote_engine::store::StrokeKey,
+    line: rnote_compose::geometry::LineId,
+) {
+    let split = gtk4::CheckButton::with_label("Chia đoạn thẳng thành các phần bằng nhau");
+    let count = gtk4::SpinButton::with_range(1.0, 20.0, 1.0);
+    count.set_value(1.0);
+    let count_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    count_row.append(&gtk4::Label::new(Some("Số điểm chia")));
+    count_row.append(&count);
+    count_row.set_visible(false);
+    let hint = gtk4::Label::builder()
+        .label("1 điểm: trung điểm; 4 điểm: chia thành 5 phần. Các điểm không tự đặt tên.")
+        .wrap(true)
+        .max_width_chars(34)
+        .xalign(0.0)
+        .css_classes(["dim-label", "caption"])
+        .visible(false)
+        .build();
+    let apply = gtk4::Button::with_label("Áp dụng");
+    apply.add_css_class("suggested-action");
+    apply.set_sensitive(false);
+    split.connect_toggled(glib::clone!(
+        #[weak]
+        count_row,
+        #[weak]
+        hint,
+        #[weak]
+        apply,
+        move |c| {
+            count_row.set_visible(c.is_active());
+            hint.set_visible(c.is_active());
+            apply.set_sensitive(c.is_active());
+        }
+    ));
+
+    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    content.set_margin_top(6);
+    content.set_margin_bottom(6);
+    content.set_margin_start(6);
+    content.set_margin_end(6);
+    content.append(&split);
+    content.append(&count_row);
+    content.append(&hint);
+    content.append(&apply);
+
+    let popover = gtk4::Popover::builder()
+        .child(&content)
+        .pointing_to(&gdk::Rectangle::new(x as i32, y as i32, 1, 1))
+        .build();
+    popover.set_parent(canvas);
+    popover.connect_closed(|p| {
+        let p = p.clone();
+        glib::idle_add_local_once(move || p.unparent());
+    });
+    let commit = glib::clone!(
+        #[weak]
+        canvas,
+        #[weak]
+        popover,
+        #[weak]
+        count,
+        #[weak]
+        split,
+        move || {
+            if split.is_active() {
+                let flags = canvas
+                    .engine_mut()
+                    .split_segment(key, line, count.value() as usize);
+                canvas.emit_handle_widget_flags(flags);
+            }
+            popover.popdown();
+        }
+    );
+    let c = commit.clone();
+    apply.connect_clicked(move |_| c());
+    count.connect_activate(move |_| commit());
+    popover.popup();
 }
 
 pub(crate) fn handle_key_controller_key_released(

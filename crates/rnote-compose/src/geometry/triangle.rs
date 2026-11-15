@@ -2,7 +2,8 @@
 use p2d::math::Vector2;
 
 /// The 4 classical triangle centers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TriangleCenterType {
     /// Trọng tâm G (Centroid - intersection of medians)
     Centroid,

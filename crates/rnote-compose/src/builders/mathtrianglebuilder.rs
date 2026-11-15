@@ -180,10 +180,18 @@ impl MathTriangleBuilder {
             if self.kind == MathShapeKind::RightTriangle {
                 fig.add_right_angle(pb, pa, pc, 12.0);
             }
+            // Special triangles keep their shape when A or B is dragged; a plain one stays free
+            if self.kind != MathShapeKind::Triangle {
+                fig.derive_affine(pc, pa, pb);
+            }
         } else {
             let ids: Vec<_> = v.iter().map(|&p| fig.add_point(p, None)).collect();
             for i in 0..ids.len() {
                 fig.add_segment(ids[i], ids[(i + 1) % ids.len()]);
+            }
+            // The other vertices follow the first side: a square stays a square
+            for &id in &ids[2..] {
+                fig.derive_affine(id, ids[0], ids[1]);
             }
         }
         fig

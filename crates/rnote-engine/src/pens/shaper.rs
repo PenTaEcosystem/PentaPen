@@ -670,6 +670,31 @@ impl PenBehaviour for Shaper {
                             progress: PenProgress::Finished,
                         }
                     }
+                    // K: no mark -> / -> // -> /// on the clicked segment (equal sides)
+                    KeyboardKey::Unicode('k' | 'K') => {
+                        let click = selected.click;
+                        if let Some(Stroke::ShapeStroke(ss)) = engine_view.store.get_stroke_mut(key)
+                            && let Shape::MathFigure(fig) = &mut ss.shape
+                            && let Some(id) = nearest_figure_segment(fig, click, hit_threshold)
+                            && let Some(l) = fig.lines.get_mut(&id)
+                        {
+                            l.tick_marks = (l.tick_marks + 1) % 4;
+                        }
+                        engine_view.store.update_geometry_for_strokes(&[key]);
+                        engine_view.store.regenerate_rendering_for_stroke(
+                            key,
+                            engine_view.camera.viewport(),
+                            engine_view.camera.image_scale(),
+                        );
+                        widget_flags |= engine_view.store.record(Instant::now());
+                        widget_flags.store_modified = true;
+                        widget_flags.redraw = true;
+                        EventResult {
+                            handled: true,
+                            propagate: EventPropagation::Stop,
+                            progress: PenProgress::InProgress,
+                        }
+                    }
                     // D: solid <-> dashed for the clicked line or circle
                     KeyboardKey::Unicode('d' | 'D') => {
                         let click = selected.click;
@@ -1494,8 +1519,18 @@ fn apply_handle_drag(
                 ellipse.radii = Vector2::new(new_radius, new_radius);
             }
             (Shape::MathFigure(fig), HandleKind::FigurePoint(id)) => {
-                if fig.circles.values().any(|c| c.center == id) {
-                    // Dragging a circle center carries the whole figure
+                // A lone circle (with at most its radius line) moves as a whole by its center;
+                // in a bigger figure only the center moves and the rest follows its rules.
+                let lone_circle = fig.circles.len() == 1
+                    && fig.circles.values().all(|c| {
+                        c.center == id
+                            && fig.lines.values().all(|l| {
+                                [l.p1, l.p2]
+                                    .iter()
+                                    .all(|&p| p == c.center || Some(p) == c.through_point)
+                            })
+                    });
+                if lone_circle {
                     if let Some(p) = fig.points.get(&id) {
                         let offset = current_pos - p.pos;
                         fig.translate(offset);
@@ -2283,6 +2318,43 @@ mod tests {
             engine.add_circle_with_radius(Vector2::new(500.0, 500.0), None, Some("O".into()), 40.0);
         assert_eq!(engine.store.stroke_keys_unordered().len(), 2);
         assert_eq!(engine.suggest_point_label(), "A");
+    }
+
+    #[test]
+    fn split_segment_into_equal_parts_that_follow_the_ends() {
+        let mut engine = crate::Engine::default();
+        let mut fig = MathFigure::new();
+        let a = fig.add_point(Vector2::new(0.0, 0.0), Some("A".into()));
+        let b = fig.add_point(Vector2::new(100.0, 0.0), Some("B".into()));
+        fig.add_segment(a, b);
+        let _ = engine.insert_shape(Shape::MathFigure(fig));
+        let (key, line) = engine
+            .figure_segment_at(Vector2::new(40.0, 3.0), 5.0)
+            .unwrap();
+        assert!(engine.figure_segment_at(Vector2::new(40.0, 30.0), 5.0).is_none());
+
+        let _ = engine.split_segment(key, line, 4);
+        let fig = figure_of(&engine.store, key).unwrap().clone();
+        assert_eq!(fig.points.len(), 6);
+        assert_eq!(fig.lines.len(), 5);
+        assert!(fig.points.values().filter(|p| p.label.is_none()).count() == 4);
+
+        // Moving B keeps the 4 points evenly spread on AB
+        let _ = engine.update_figure_point(key, b, Some("B".into()), Vector2::new(0.0, 200.0));
+        let fig = figure_of(&engine.store, key).unwrap();
+        let mut ys: Vec<f64> = fig
+            .points
+            .values()
+            .filter(|p| p.label.is_none())
+            .map(|p| p.pos.y)
+            .collect();
+        ys.sort_by(f64::total_cmp);
+        assert!(
+            ys.iter()
+                .zip([40.0, 80.0, 120.0, 160.0])
+                .all(|(y, e)| (y - e).abs() < 1e-9),
+            "{ys:?}"
+        );
     }
 
     #[test]

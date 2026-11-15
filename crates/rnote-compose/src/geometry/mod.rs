@@ -1,6 +1,8 @@
 // Geometry module: Construction (Geo-Aid) and Constraint Solver (SolveSpace slvs)
 /// Classical ruler-and-compass geometric constructions (Geo-Aid architecture)
 pub mod construction;
+/// Dependent points that follow the points they were built from
+pub mod derive;
 /// Frames of a figure being drawn element by element
 mod drawing;
 /// Drawing more into an existing figure
@@ -20,6 +22,7 @@ pub mod triangle;
 mod tests;
 
 pub use construction::*;
+pub use derive::{Derivation, Derived};
 pub use entity::*;
 pub use figure::MathFigure;
 pub use render::draw_math_figure;

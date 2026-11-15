@@ -1127,6 +1127,13 @@ impl Engine {
         f: &crate::graph::Function,
         top_left: Vector2,
     ) -> Result<(WidgetFlags, Vec<StrokeKey>), String> {
+        // A trig function without a domain is studied on one period, not towards ±∞
+        let f = match f.domain {
+            None if f.is_trig() => &f
+                .clone()
+                .with_domain(-std::f64::consts::PI, std::f64::consts::PI),
+            _ => f,
+        };
         let table = crate::graph::VariationTable::study(f)?;
         Ok(self.insert_generated_strokes(|style, color| {
             crate::graph::table_strokes(&table, top_left, style, color)
@@ -1187,6 +1194,75 @@ impl Engine {
         fig.drag_point(id, pos);
         if let Some(p) = fig.points.get_mut(&id) {
             p.label = label;
+        }
+        self.store.update_geometry_for_strokes(&[key]);
+        self.store.regenerate_rendering_for_stroke(
+            key,
+            self.camera.viewport(),
+            self.camera.image_scale(),
+        );
+        let mut widget_flags = self.record(Instant::now());
+        widget_flags.store_modified = true;
+        widget_flags.redraw = true;
+        widget_flags
+    }
+
+    /// The geometry segment nearest to `pos` within `tolerance`: its stroke and id.
+    pub fn figure_segment_at(
+        &self,
+        pos: Vector2,
+        tolerance: f64,
+    ) -> Option<(StrokeKey, rnote_compose::geometry::LineId)> {
+        self.math_figures()
+            .flat_map(|(key, fig)| {
+                fig.lines.values().filter_map(move |l| {
+                    let (a, b) = (fig.points.get(&l.p1)?.pos, fig.points.get(&l.p2)?.pos);
+                    let d = b - a;
+                    let t = ((pos - a).dot(d) / d.length_squared().max(1e-9)).clamp(0.0, 1.0);
+                    Some(((a + d * t - pos).length(), key, l.id))
+                })
+            })
+            .filter(|(dist, ..)| *dist <= tolerance)
+            .min_by(|x, y| x.0.total_cmp(&y.0))
+            .map(|(_, key, id)| (key, id))
+    }
+
+    /// Put `n` unnamed points evenly along a segment, splitting it into `n + 1` equal parts.
+    /// The points stay evenly spread when an end point moves. One undo step.
+    pub fn split_segment(
+        &mut self,
+        key: StrokeKey,
+        line: rnote_compose::geometry::LineId,
+        n: usize,
+    ) -> WidgetFlags {
+        let Some(crate::strokes::Stroke::ShapeStroke(ss)) = self.store.get_stroke_mut(key) else {
+            return WidgetFlags::default();
+        };
+        let rnote_compose::Shape::MathFigure(fig) = &mut ss.shape else {
+            return WidgetFlags::default();
+        };
+        let Some(l) = fig.lines.get(&line).cloned() else {
+            return WidgetFlags::default();
+        };
+        let (Some(a), Some(b)) = (
+            fig.points.get(&l.p1).map(|p| p.pos),
+            fig.points.get(&l.p2).map(|p| p.pos),
+        ) else {
+            return WidgetFlags::default();
+        };
+        for k in 1..=n {
+            let t = k as f64 / (n + 1) as f64;
+            let id = fig.add_point(a + (b - a) * t, None);
+            fig.derive(
+                id,
+                rnote_compose::geometry::Derivation::Affine {
+                    a: l.p1,
+                    b: l.p2,
+                    u: t,
+                    v: 0.0,
+                },
+            );
+            fig.split_segments_at_point(id, 1.0);
         }
         self.store.update_geometry_for_strokes(&[key]);
         self.store.regenerate_rendering_for_stroke(
@@ -1344,6 +1420,13 @@ impl Engine {
             widget_flags.redraw = true;
         }
         (keys.len(), widget_flags)
+    }
+
+    /// The figure that has points with all these names (case-insensitive), if one does.
+    pub fn figure_with_points(&self, names: &[String]) -> Option<StrokeKey> {
+        self.math_figures()
+            .find(|(_, fig)| names.iter().all(|n| fig.find_point_by_label(n).is_some()))
+            .map(|(key, _)| key)
     }
 
     /// Lines ("AB") and circles ("(O)") between named points on the page, as context for the AI.
@@ -1520,10 +1603,10 @@ impl Engine {
         let mut pts_desc = Vec::new();
         let mut sorted_pts: Vec<_> = fig.points.values().collect();
         sorted_pts.sort_by_key(|p| p.id);
+        // Canvas coordinates, the same ones the reply's points are placed at
         for p in sorted_pts {
-            let rel = p.pos - origin;
             let name = p.label.as_deref().unwrap_or("(giao điểm)");
-            pts_desc.push(format!("{name}({:.0},{:.0})", rel.x, rel.y));
+            pts_desc.push(format!("{name}({:.0},{:.0})", p.pos.x, p.pos.y));
         }
 
         let mut lines_desc = Vec::new();
@@ -1560,9 +1643,7 @@ impl Engine {
         }
 
         let desc = format!(
-            "Điểm (tọa độ tương đối so với gốc {:.0},{:.0}): [{}]; Đoạn thẳng: [{}]; Đường tròn: [{}]",
-            origin.x,
-            origin.y,
+            "Điểm (tọa độ trên bảng): [{}]; Đoạn thẳng: [{}]; Đường tròn: [{}]",
             pts_desc.join(", "),
             lines_desc.join(", "),
             circ_desc.join(", ")

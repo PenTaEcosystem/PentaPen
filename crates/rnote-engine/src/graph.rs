@@ -33,6 +33,8 @@ pub struct Function {
     expr: Expr,
     /// The formula as it was normalized, e.g. `x^3-3*x+1`
     pub text: String,
+    /// Only this interval [a, b] is drawn and studied (miền khảo sát); None: everywhere
+    pub domain: Option<(f64, f64)>,
 }
 
 impl Function {
@@ -63,12 +65,62 @@ impl Function {
         if p.pos != p.tokens.len() {
             return Err(format!("Không hiểu phần \"{}\"", p.rest()));
         }
-        Ok(Self { expr, text })
+        Ok(Self {
+            expr,
+            text,
+            domain: None,
+        })
     }
 
     /// f(x); NaN outside the domain.
     pub fn eval(&self, x: f64) -> f64 {
-        eval(&self.expr, x)
+        match self.domain {
+            Some((a, b)) if x < a - 1e-12 || x > b + 1e-12 => f64::NAN,
+            _ => eval(&self.expr, x),
+        }
+    }
+
+    /// The same function, drawn and studied only on [a, b].
+    pub fn with_domain(mut self, a: f64, b: f64) -> Self {
+        self.domain = Some((a.min(b), a.max(b)));
+        self
+    }
+
+    /// Trigonometric: periodic, so it is studied on one period instead of towards ±∞.
+    pub fn is_trig(&self) -> bool {
+        ["sin", "cos", "tan", "cot"]
+            .iter()
+            .any(|t| self.text.contains(t))
+    }
+}
+
+/// A number typed as a formula: `2`, `-pi`, `pi/2`, `2pi`, `1,5`.
+pub fn parse_number(s: &str) -> Result<f64, String> {
+    let v = Function::parse(&s.trim().replace(',', "."))?.eval(0.0);
+    if v.is_finite() {
+        Ok(v)
+    } else {
+        Err(format!("\"{}\" không phải là số", s.trim()))
+    }
+}
+
+/// An interval typed as `[a; b]`, `a; b` or `[-pi, pi]`.
+pub fn parse_domain(s: &str) -> Result<(f64, f64), String> {
+    let inner = s.trim().trim_start_matches(['[', '(']).trim_end_matches([']', ')']);
+    // ";" separates when present, so "0,5; 2" keeps its decimal comma
+    let parts: Vec<&str> = if inner.contains(';') {
+        inner.split(';').collect()
+    } else {
+        inner.split(',').collect()
+    };
+    let [a, b] = parts.as_slice() else {
+        return Err("Miền khảo sát dạng [a; b], ví dụ [-pi; pi]".to_string());
+    };
+    let (a, b) = (parse_number(a)?, parse_number(b)?);
+    if a < b {
+        Ok((a, b))
+    } else {
+        Err("Miền khảo sát cần a < b".to_string())
     }
 }
 
@@ -530,13 +582,24 @@ fn side_limit(f: &Function, x: f64, dir: f64) -> Val {
 
 fn limit_at_infinity(f: &Function, dir: f64) -> Val {
     let (a, b) = (f.eval(dir * 1e4), f.eval(dir * 1e6));
-    if !b.is_finite() && !a.is_finite() {
+    // e^x overflows to infinity: that is the limit, not a missing value
+    if b.is_infinite() {
+        return if b > 0.0 { Val::PosInf } else { Val::NegInf };
+    }
+    if b.is_nan() {
         return Val::Finite(f64::NAN);
     }
     if b.abs() > 1e5 && b.abs() > a.abs() {
-        if b > 0.0 { Val::PosInf } else { Val::NegInf }
-    } else {
+        return if b > 0.0 { Val::PosInf } else { Val::NegInf };
+    }
+    // A finite limit stays put far out; sin x keeps swinging and has none (blank cell)
+    let settled = [1e5, 1e5 + 1.3, 1e6 + 2.9, 1e6 + 0.7]
+        .iter()
+        .all(|&x| (f.eval(dir * x) - b).abs() <= 1e-3 * (1.0 + b.abs()));
+    if settled {
         Val::Finite(round(b))
+    } else {
+        Val::Finite(f64::NAN)
     }
 }
 
@@ -577,7 +640,8 @@ impl VariationTable {
             match (run_start, defined(a)) {
                 (None, true) => run_start = Some(a),
                 (Some(s), false) => {
-                    runs.push((s, a));
+                    // The run ends at the last defined sample, so its edge can be refined
+                    runs.push((s, a - step));
                     run_start = None;
                 }
                 _ => {}
@@ -755,6 +819,29 @@ pub fn fmt_val(v: Val) -> String {
         Val::PosInf => "+∞".to_string(),
         Val::Finite(n) if n.is_nan() => "".to_string(),
         Val::Finite(n) => {
+            // Multiples of π/4 (from trig functions) read as π, π/2, −3π/4 ...
+            let k = (n / std::f64::consts::FRAC_PI_4).round();
+            if n.fract() != 0.0
+                && k != 0.0
+                && k.abs() <= 16.0
+                && (n - k * std::f64::consts::FRAC_PI_4).abs() < 6e-4
+            {
+                let (num, den) = match k as i64 {
+                    k if k % 4 == 0 => (k / 4, 1),
+                    k if k % 2 == 0 => (k / 2, 2),
+                    k => (k, 4),
+                };
+                let sign = if num < 0 { "−" } else { "" };
+                let num = match num.abs() {
+                    1 => "π".to_string(),
+                    m => format!("{m}π"),
+                };
+                return if den == 1 {
+                    format!("{sign}{num}")
+                } else {
+                    format!("{sign}{num}/{den}")
+                };
+            }
             let s = format!("{:.2}", n);
             let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
             let s = if s == "-0" { "0".to_string() } else { s };
@@ -1145,6 +1232,29 @@ mod tests {
         assert_eq!(t.signs, vec![-1, 1]);
         assert_eq!(fmt_val(Val::Finite(-1.5)), "−1,5");
         assert_eq!(fmt_val(Val::Finite(3.0)), "3");
+    }
+
+    #[test]
+    fn exponential_limit_and_trig_on_a_domain() {
+        // e^x overflows far out: the limit is +∞, not a blank cell
+        let t = VariationTable::study(&f("exp(x)")).unwrap();
+        assert_eq!(t.nodes.last().unwrap().left, Val::PosInf);
+        assert_eq!(t.nodes[0].left, Val::Finite(0.0));
+        // sin x swings forever: no limit at ±∞
+        assert!(matches!(limit_at_infinity(&f("sin(x)"), 1.0), Val::Finite(v) if v.is_nan()));
+
+        // On [-π, π]: the ends and the two extrema, x shown with π
+        let pi = std::f64::consts::PI;
+        let sin = f("sin(x)").with_domain(-pi, pi);
+        assert!(sin.eval(4.0).is_nan());
+        let t = VariationTable::study(&sin).unwrap();
+        let xs: Vec<String> = t.nodes.iter().map(|n| fmt_val(n.x)).collect();
+        assert_eq!(xs, ["−π", "−π/2", "π/2", "π"]);
+        assert_eq!(t.signs, vec![-1, 1, -1]);
+
+        assert_eq!(parse_domain("[0; 2pi]"), Ok((0.0, 2.0 * pi)));
+        assert_eq!(parse_domain("[-1,5; 2]"), Ok((-1.5, 2.0)));
+        assert!(parse_domain("[2; 1]").is_err());
     }
 
     #[test]

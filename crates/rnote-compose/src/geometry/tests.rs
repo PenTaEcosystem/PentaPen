@@ -160,8 +160,9 @@ fn test_math_figure_triangle_with_4_centers() {
     assert!(g.is_some());
     assert!(o.is_some());
     assert!(h.is_some());
-    // 3 vertices + 4 centers + 3 medians feet + 2 altitude feet + 2 bisector feet = 14
-    assert_eq!(figure.points.len(), 14);
+    // 3 vertices + 4 centers + 3 medians feet + 2 altitude feet + 2 bisector feet
+    // + the hidden point where the incircle touches BC = 15
+    assert_eq!(figure.points.len(), 15);
 }
 
 #[test]
@@ -306,13 +307,13 @@ fn test_intersections_with_other_shapes() {
 #[test]
 fn test_split_segments_at_intersection_allows_dragging_crossing() {
     let mut fig = MathFigure::new();
-    let (_a, _b, _l1) = fig.build_line(
+    let (a, b, _l1) = fig.build_line(
         Vector2::new(0.0, 0.0),
         Vector2::new(100.0, 0.0),
         Some("A"),
         Some("B"),
     );
-    let (_c, _d, _l2) = fig.build_line(
+    let (c, d, _l2) = fig.build_line(
         Vector2::new(50.0, -40.0),
         Vector2::new(50.0, 40.0),
         Some("C"),
@@ -330,7 +331,11 @@ fn test_split_segments_at_intersection_allows_dragging_crossing() {
         .count();
     assert_eq!(connected, 4);
 
-    // Dragging the intersection point moves the vertex of all 4 sub-segments
-    assert!(fig.drag_point(x_id, Vector2::new(60.0, 15.0)));
-    assert!((fig.points[&x_id].pos - Vector2::new(60.0, 15.0)).length() < 1e-6);
+    // Moving an end point carries the crossing along: it stays on both lines
+    assert!(fig.drag_point(b, Vector2::new(100.0, 30.0)));
+    let p = |id| fig.points[&id].pos;
+    let x = p(x_id);
+    assert!((x - p(a)).perp_dot(p(b) - p(a)).abs() < 1e-6);
+    assert!((x - p(c)).perp_dot(p(d) - p(c)).abs() < 1e-6);
+    assert!((x - Vector2::new(50.0, 15.0)).length() < 1e-6);
 }

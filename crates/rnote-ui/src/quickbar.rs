@@ -116,7 +116,8 @@ fn shapes_button() -> MenuButton {
 }
 
 /// One button cycling solid -> dashed -> dotted -> dash-dot for the next shapes (math figures included).
-fn line_style_button(appwindow: &RnAppWindow) -> Button {
+/// The line style for new lines and circles, picked from a drop-down list.
+fn line_style_button(appwindow: &RnAppWindow) -> MenuButton {
     use rnote_compose::style::smooth::LineStyle;
     const STYLES: [(LineStyle, &str, &str); 4] = [
         (LineStyle::Solid, "linestyle-solid-symbolic", "Nét liền"),
@@ -140,15 +141,17 @@ fn line_style_button(appwindow: &RnAppWindow) -> Button {
             _ => 1,
         }
     }
-    fn show(b: &Button, i: usize) {
+    fn show(b: &MenuButton, i: usize) {
         b.set_icon_name(STYLES[i].1);
         b.set_tooltip_text(Some(&format!(
-            "{}: bấm để đổi kiểu nét (liền, đứt, chấm, chấm gạch). Chọn một hình rồi bấm D để đổi nét hình có sẵn.",
+            "Kiểu nét: {}. Bấm để chọn nét khác. Chọn một hình rồi bấm D để đổi nét hình có sẵn.",
             STYLES[i].2
         )));
     }
-    let b = Button::new();
-    b.add_css_class("flat");
+    let list = GtkBox::new(Orientation::Vertical, 2);
+    let popover = Popover::builder().child(&list).build();
+    let mb = MenuButton::builder().popover(&popover).build();
+    mb.add_css_class("flat");
     let current = appwindow
         .engine_config()
         .read()
@@ -156,25 +159,37 @@ fn line_style_button(appwindow: &RnAppWindow) -> Button {
         .shaper_config
         .smooth_options
         .line_style;
-    show(&b, index_of(current));
-    let w = appwindow.downgrade();
-    b.connect_clicked(move |b| {
-        let Some(appwindow) = w.upgrade() else { return };
-        let next = {
-            let mut config = appwindow.engine_config().write();
-            let options = &mut config.pens_config.shaper_config.smooth_options;
-            let next = (index_of(options.line_style) + 1) % STYLES.len();
-            options.update_line_style(STYLES[next].0);
-            next
-        };
-        show(b, next);
-        appwindow
-            .overlays()
-            .penssidebar()
-            .shaper_page()
-            .refresh_ui(&appwindow);
-    });
-    b
+    show(&mb, index_of(current));
+    for (i, (style, icon, name)) in STYLES.into_iter().enumerate() {
+        let row = GtkBox::new(Orientation::Horizontal, 8);
+        row.append(&gtk4::Image::from_icon_name(icon));
+        row.append(&gtk4::Label::new(Some(name)));
+        let item = Button::builder().child(&row).build();
+        item.add_css_class("flat");
+        let w = appwindow.downgrade();
+        let mbw = mb.downgrade();
+        item.connect_clicked(move |_| {
+            let (Some(appwindow), Some(mb)) = (w.upgrade(), mbw.upgrade()) else {
+                return;
+            };
+            appwindow
+                .engine_config()
+                .write()
+                .pens_config
+                .shaper_config
+                .smooth_options
+                .update_line_style(style);
+            show(&mb, i);
+            mb.popdown();
+            appwindow
+                .overlays()
+                .penssidebar()
+                .shaper_page()
+                .refresh_ui(&appwindow);
+        });
+        list.append(&item);
+    }
+    mb
 }
 
 fn labeled_spin(row: &GtkBox, label: &str, min: f64, max: f64, value: f64) -> gtk4::SpinButton {
@@ -226,6 +241,11 @@ fn graph_button(appwindow: &RnAppWindow) -> MenuButton {
     let unit = labeled_spin(&row3, "1 đơn vị =", 10.0, 200.0, 40.0);
     row3.append(&gtk4::Label::new(Some("px")));
     content.append(&row3);
+    let domain = gtk4::Entry::builder()
+        .placeholder_text("Miền khảo sát (tuỳ chọn), vd: [-pi; pi] hoặc [0; 2pi]")
+        .tooltip_text("Chỉ vẽ đồ thị và lập bảng biến thiên trên đoạn [a; b]. Để trống: cả trục.")
+        .build();
+    content.append(&domain);
 
     let with_table = gtk4::CheckButton::with_label("Vẽ kèm bảng biến thiên");
     with_table.set_active(true);
@@ -249,12 +269,19 @@ fn graph_button(appwindow: &RnAppWindow) -> MenuButton {
         popover,
         #[weak]
         entry,
+        #[weak]
+        domain,
         move || {
             let Some(appwindow) = w.upgrade() else { return };
             let Some(canvas) = appwindow.active_tab_canvas() else {
                 return;
             };
-            let f = match Function::parse(&entry.text()) {
+            let f = match Function::parse(&entry.text()).and_then(|f| {
+                match domain.text().trim() {
+                    "" => Ok(f),
+                    d => rnote_engine::graph::parse_domain(d).map(|(a, b)| f.with_domain(a, b)),
+                }
+            }) {
                 Ok(f) => f,
                 Err(e) => {
                     appwindow.overlays().dispatch_toast_text(&e, None);

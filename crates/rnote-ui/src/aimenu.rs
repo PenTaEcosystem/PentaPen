@@ -140,9 +140,10 @@ Rules:
 - When "Selected shape" is provided in the user prompt, your edits apply DIRECTLY to that selected shape in-place:
   - Keep `"replace": false` when adding constructions (altitude, median, bisector, circumcircle, incircle, tangents, etc.), adding lines/circles/points, restyling lines/circles, moving specific points (by listing them in `"points"` with new canvas coordinates), resizing an existing circle (by listing its `"center"` and new `"radius"` in `"circles"`), renaming points (`"rename"`), or removing elements (`"remove_points"`, `"remove_lines"`, `"remove_circles"`).
   - Set `"replace": true` ONLY when the user asks to replace or redraw the entire selected shape into a completely different shape (e.g. "đổi thành hình vuông", "vẽ lại thành tam giác đều").
-- Respect requested lengths and angles. If the user gives lengths in cm, 1 cm = 40 px.
+- Respect requested lengths and angles. Lengths in cm use the "Scale" given in the user prompt.
 - Deleting (xoá, bỏ, gỡ): list what to delete in "remove_points" (a point with its lines and circles), "remove_lines" (by end point names) and "remove_circles" (by center name); draw nothing else. Without a selected shape this works on every figure on the canvas. "remove_all": true deletes ALL shapes on the canvas (xoá hết, xoá tất cả); use it only when the user asks to delete everything.
 - "style" (lines and circles) is "solid", "dashed", "dotted" or "dashdot"; use dashed for auxiliary lines.
+- "ticks": 1, 2 or 3 on a line marks equal segments (kí hiệu các cạnh bằng nhau): equal sides get the same number, e.g. AB = AC both "ticks": 1; 0 removes the marks.
 - To change an existing line (e.g. "make AB dashed"), list it in "lines" with the new style: lines between existing points are restyled, not redrawn.
 - Intersections are added automatically.
 Coordinate plane (hệ trục Oxy), function graphs (đồ thị hàm số), variation tables (bảng biến thiên):
@@ -152,6 +153,7 @@ Coordinate plane (hệ trục Oxy), function graphs (đồ thị hàm số), var
   Write f with + - * / ^ ( ), sqrt(), abs(), sin cos tan ln log exp, pi; the variable is x.
   Choose the window so extrema, intercepts and asymptotes are visible.
 - "tables": [{"f": "(2*x+1)/(x-1)"}] draws only the variation table of f.
+- "domain": ["-pi", "pi"] in a graph or table limits the curve and the table to [a, b] (miền khảo sát); use it when the user names an interval, and for trig functions (one or two periods).
 - Points, lines and constructions still work on the axes (e.g. A, B on the plane, segment AB, midpoint)."#;
 
 #[derive(serde::Deserialize, Debug, Default)]
@@ -190,6 +192,28 @@ struct JsonGraph {
     f: String,
     #[serde(default)]
     table: bool,
+    /// [a, b] as numbers or formulas ("-pi", "2*pi"), or "[a; b]"
+    #[serde(default)]
+    domain: Option<serde_json::Value>,
+}
+
+impl JsonGraph {
+    /// The function with its domain, or why it cannot be read.
+    fn function(&self) -> Result<Function, String> {
+        let f = Function::parse(&self.f)?;
+        let num = |v: &serde_json::Value| match v {
+            serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| "số không hợp lệ".to_string()),
+            serde_json::Value::String(s) => rnote_engine::graph::parse_number(s),
+            _ => Err("miền khảo sát không hợp lệ".to_string()),
+        };
+        let (a, b) = match &self.domain {
+            None | Some(serde_json::Value::Null) => return Ok(f),
+            Some(serde_json::Value::String(s)) => rnote_engine::graph::parse_domain(s)?,
+            Some(serde_json::Value::Array(v)) if v.len() == 2 => (num(&v[0])?, num(&v[1])?),
+            Some(_) => return Err("miền khảo sát dạng [a, b]".to_string()),
+        };
+        Ok(f.with_domain(a, b))
+    }
 }
 
 /// The Oxy frame the reply asks for, with O at `anchor`; None for a plain geometry reply.
@@ -235,6 +259,9 @@ struct JsonLine {
     p2: String,
     #[serde(default)]
     style: Option<String>,
+    /// Equal-side marks: 1, 2 or 3 strokes across the segment (0 removes them)
+    #[serde(default)]
+    ticks: Option<u8>,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -298,6 +325,45 @@ fn build_figure(geom: &GeometryJson, existing: &[(String, Vector2)]) -> (MathFig
     let mut fig = MathFigure::new();
     let warnings = apply_geometry_to_figure(&mut fig, geom, existing);
     (fig, warnings)
+}
+
+/// Point names the reply uses without defining them (in "points" or as a construction result),
+/// i.e. points it expects on the canvas already.
+fn referenced_names(geom: &GeometryJson) -> Vec<String> {
+    let key = |n: &str| n.trim().to_uppercase();
+    let defined: std::collections::HashSet<String> = geom
+        .points
+        .iter()
+        .map(|p| key(&p.name))
+        .chain(geom.constructions.iter().flat_map(|c| {
+            c.name
+                .iter()
+                .flat_map(|n| n.split(','))
+                .map(key)
+                .chain(c.names.iter().map(|n| key(n)))
+                .collect::<Vec<_>>()
+        }))
+        .collect();
+    let mut used: Vec<String> = geom
+        .lines
+        .iter()
+        .flat_map(|l| [l.p1.clone(), l.p2.clone()])
+        .chain(
+            geom.circles
+                .iter()
+                .flat_map(|c| std::iter::once(c.center.clone()).chain(c.through.clone())),
+        )
+        .chain(geom.constructions.iter().flat_map(|c| c.of.clone()))
+        .chain(
+            geom.right_angles
+                .iter()
+                .flat_map(|r| [r.vertex.clone(), r.arm1.clone(), r.arm2.clone()]),
+        )
+        .filter(|n| !n.trim().is_empty() && !defined.contains(&key(n)))
+        .collect();
+    used.sort();
+    used.dedup();
+    used
 }
 
 /// Whether the reply asks to delete anything.
@@ -548,7 +614,9 @@ fn apply_geometry_to_figure(
         let created = match (c.op.to_lowercase().as_str(), pts.as_slice()) {
             ("midpoint", &[a, b]) => {
                 let m = (fig.points[&a].pos + fig.points[&b].pos) * 0.5;
-                Some(fig.add_point(m, Some(name.unwrap_or("M").to_string())))
+                let id = fig.add_point(m, Some(name.unwrap_or("M").to_string()));
+                fig.derive(id, rnote_compose::geometry::Derivation::Midpoint { a, b });
+                Some(id)
             }
             ("altitude" | "perpendicular", &[a, b, c]) => {
                 fig.add_altitude(a, b, c, name).map(|(p, _)| p)
@@ -631,10 +699,18 @@ fn apply_geometry_to_figure(
                     {
                         line.style = style;
                     }
+                    if let Some(t) = l.ticks
+                        && let Some(line) = fig.lines.get_mut(&existing_line_id)
+                    {
+                        line.tick_marks = t.min(3);
+                    }
                 } else {
                     let id = fig.add_segment(a, b);
                     if let Some(style) = line_style(l.style.as_deref()) {
                         fig.lines.get_mut(&id).unwrap().style = style;
+                    }
+                    if let Some(t) = l.ticks {
+                        fig.lines.get_mut(&id).unwrap().tick_marks = t.min(3);
                     }
                 }
             }
@@ -647,6 +723,8 @@ fn apply_geometry_to_figure(
             fig.add_right_angle(v, a1, a2, 8.0);
         }
     }
+    // Points the reply moved carry their constructions along
+    fig.update_derived();
     fig.auto_detect_intersections();
     warnings
 }
@@ -662,7 +740,11 @@ fn call_api(
     use std::process::{Command, Stdio};
 
     let url = format!("{}/{path}", cfg.base_url.trim().trim_end_matches('/'));
-    let body_path = std::env::temp_dir().join(format!("pentapen-ai-{}.json", std::process::id()));
+    // One file per request: two requests in flight must not share (and delete) one body file
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let body_path =
+        std::env::temp_dir().join(format!("pentapen-ai-{}-{n}.json", std::process::id()));
     let mut cmd = Command::new("curl");
     cmd.args(["-sS", "--max-time", "180", &url])
         .args(["-H", "Content-Type: application/json", "-H", "@-"])
@@ -724,13 +806,19 @@ fn call_api(
 }
 
 /// One chat completion: the model's reply text.
-fn chat_completion(cfg: &AiConfig, user: &str) -> Result<String, String> {
+/// `history`: the last exchanges (user and assistant messages), so "now add the altitude from A"
+/// knows what was drawn before.
+fn chat_completion(
+    cfg: &AiConfig,
+    history: &[serde_json::Value],
+    user: &str,
+) -> Result<String, String> {
+    let mut messages = vec![serde_json::json!({"role": "system", "content": SYSTEM_PROMPT})];
+    messages.extend(history.iter().cloned());
+    messages.push(serde_json::json!({"role": "user", "content": user}));
     let mut body = serde_json::json!({
         "model": cfg.model.trim(),
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user},
-        ],
+        "messages": messages,
     });
     // JSON mode where the service is known to support it (custom servers may reject the field)
     if matches!(PROVIDERS[provider_index(cfg)].id, "gemini" | "openai") {
@@ -812,6 +900,10 @@ mod imp {
         pub(crate) appwindow: RefCell<Option<glib::WeakRef<RnAppWindow>>>,
         /// Bumped by every point pick, so a stale timeout does not cancel a newer pick
         pub(crate) pick_generation: Cell<u32>,
+        /// A request is on its way: sending again waits for it
+        pub(crate) busy: Cell<bool>,
+        /// Recent user/assistant messages sent along with the next request
+        pub(crate) history: RefCell<Vec<serde_json::Value>>,
         /// The ring that follows the finger while a point is being picked
         pub(crate) pick_marker: RefCell<Option<gtk4::Box>>,
         /// The drawing being played (see `play_drawing`), finished at once when the user acts
@@ -1416,7 +1508,7 @@ impl RnAiMenu {
         let Some(canvas) = appwindow.active_tab_canvas() else {
             return (false, warnings);
         };
-        let mut parse = |g: &JsonGraph| match Function::parse(&g.f) {
+        let mut parse = |g: &JsonGraph| match g.function() {
             Ok(f) => Some(f),
             Err(e) => {
                 warnings.push(format!("{}: {e}", g.f));
@@ -1529,9 +1621,13 @@ impl RnAiMenu {
             );
             return;
         }
+        if self.imp().busy.get() {
+            self.append_ai_message("Đang chờ AI trả lời lệnh trước, vui lòng đợi.");
+            return;
+        }
 
         // Check if the user has clicked/selected a shape on the canvas to edit in-place
-        let (selected_target, anchor, existing, (lines, circles)) = {
+        let (selected_target, anchor, existing, (lines, circles), cm) = {
             let engine = canvas.engine_ref();
             let sel = engine.selected_shape_key().and_then(|key| {
                 let (origin, ctx) = engine.selected_shape_ai_context(key)?;
@@ -1548,6 +1644,8 @@ impl RnAiMenu {
                 anchor,
                 engine.named_figure_points(),
                 engine.named_figure_lines_and_circles(),
+                // The same scale as the circle radius dialog
+                engine.document.config.format.dpi() / 2.54,
             )
         };
         let existing_desc = if existing.is_empty() {
@@ -1570,12 +1668,12 @@ impl RnAiMenu {
         };
         let user = if let Some((_, _, ref shape_ctx, _)) = selected_target {
             format!(
-                "Anchor: ({:.0}, {:.0}).\nSelected shape (modify this shape in-place): {shape_ctx}.\nExisting canvas points: {existing_desc}.\n\nRequest: {prompt}",
+                "Anchor: ({:.0}, {:.0}). Scale: 1 cm = {cm:.1} px.\nSelected shape (modify this shape in-place): {shape_ctx}.\nExisting canvas points: {existing_desc}.\n\nRequest: {prompt}",
                 anchor.x, anchor.y
             )
         } else {
             format!(
-                "Anchor: ({:.0}, {:.0}).\nExisting points: {existing_desc}.\n\nRequest: {prompt}",
+                "Anchor: ({:.0}, {:.0}). Scale: 1 cm = {cm:.1} px.\nExisting points: {existing_desc}.\n\nRequest: {prompt}",
                 anchor.x, anchor.y
             )
         };
@@ -1585,8 +1683,29 @@ impl RnAiMenu {
             glib::markup_escape_text(&cfg.model)
         ));
         let this = self.clone();
+        let history = self.imp().history.borrow().clone();
+        let _ = self.imp().busy.replace(true);
+        self.imp().send_button.set_sensitive(false);
         glib::spawn_future_local(async move {
-            let reply = blocking::unblock(move || chat_completion(&cfg, &user)).await;
+            /// Sending is possible again however this request ends
+            struct Busy(RnAiMenu);
+            impl Drop for Busy {
+                fn drop(&mut self) {
+                    self.0.imp().busy.set(false);
+                    self.0.imp().send_button.set_sensitive(true);
+                }
+            }
+            let _busy = Busy(this.clone());
+            let asked = user.clone();
+            let reply = blocking::unblock(move || chat_completion(&cfg, &history, &user)).await;
+            if let Ok(r) = &reply {
+                let mut h = this.imp().history.borrow_mut();
+                h.push(serde_json::json!({"role": "user", "content": asked}));
+                h.push(serde_json::json!({"role": "assistant", "content": r}));
+                // The last 3 exchanges are enough context and keep requests small
+                let excess = h.len().saturating_sub(6);
+                h.drain(..excess);
+            }
             let mut geom = match reply.and_then(|r| parse_geometry(&r)) {
                 Ok(geom) => geom,
                 Err(e) => {
@@ -1611,6 +1730,18 @@ impl RnAiMenu {
             } else {
                 selected_target
             };
+            // Nothing selected, but the reply builds on named points that are all in one figure
+            // ("now draw the altitude from A"): add to that figure instead of a copy next to it
+            let selected_target = selected_target.or_else(|| {
+                let names = referenced_names(&geom);
+                if names.is_empty() || geom.axes.is_some() || !geom.graphs.is_empty() {
+                    return None;
+                }
+                let canvas = this.appwindow()?.active_tab_canvas()?;
+                let engine = canvas.engine_ref();
+                let key = engine.figure_with_points(&names)?;
+                Some((key, anchor, String::new(), engine.stroke_as_math_figure(key)?))
+            });
             // Everything the reply adds, replayed stroke by stroke at the end
             let mut drawn = Vec::new();
             let (drew_graph, graph_warnings) = this.draw_graphs(&mut geom, anchor, &mut drawn);
@@ -1762,6 +1893,23 @@ impl RnAiMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn follow_up_names_the_points_it_builds_on() {
+        let geom = parse_geometry(
+            r#"{"constructions": [{"op": "altitude", "of": ["A", "B", "C"], "name": "H"}],
+                "lines": [{"p1": "a", "p2": "H"}], "points": [{"name": "D", "x": 1, "y": 2}],
+                "circles": [{"center": "D", "through": "B"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(referenced_names(&geom), ["A", "B", "C", "a"]);
+        let fresh = parse_geometry(
+            r#"{"points": [{"name": "A", "x": 0, "y": 0}, {"name": "B", "x": 9, "y": 0}],
+                "lines": [{"p1": "A", "p2": "B"}]}"#,
+        )
+        .unwrap();
+        assert!(referenced_names(&fresh).is_empty());
+    }
 
     #[test]
     fn deletes_what_the_reply_lists() {

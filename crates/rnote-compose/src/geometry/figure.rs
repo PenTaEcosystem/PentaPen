@@ -6,6 +6,7 @@ use super::entity::{
     CircleId, ConstraintId, GeomCircle, GeomLine, GeomPoint, LineId, LineStyle, LineType, PointId,
     RightAngleMark,
 };
+use super::derive::{Derivation, Derived};
 use super::solver::{Constraint, ConstraintSolver};
 use super::triangle::{Triangle, TriangleCenterType};
 use crate::Transformable;
@@ -40,6 +41,8 @@ pub struct MathFigure {
     pub next_circle_id: usize,
     /// Counter for unique ConstraintId
     pub next_constraint_id: usize,
+    /// Constructed points and the rule they follow when other points move
+    pub derived: Vec<Derived>,
 }
 
 impl Default for MathFigure {
@@ -54,6 +57,7 @@ impl Default for MathFigure {
             next_line_id: 1,
             next_circle_id: 1,
             next_constraint_id: 1,
+            derived: Vec::new(),
         }
     }
 }
@@ -185,10 +189,14 @@ impl MathFigure {
             TriangleCenterType::Centroid => {
                 let g_pos = tri.centroid();
                 let g_id = self.add_point(g_pos, Some("G".to_string()));
+                self.derive(g_id, Derivation::Center { kind: center_type, a: a_id, b: b_id, c: c_id });
                 if add_auxiliary_lines {
                     let m_bc = self.add_point(tri.midpoint_bc(), None);
                     let m_ca = self.add_point(tri.midpoint_ca(), None);
                     let m_ab = self.add_point(tri.midpoint_ab(), None);
+                    self.derive(m_bc, Derivation::Midpoint { a: b_id, b: c_id });
+                    self.derive(m_ca, Derivation::Midpoint { a: c_id, b: a_id });
+                    self.derive(m_ab, Derivation::Midpoint { a: a_id, b: b_id });
                     self.add_auxiliary_line(a_id, m_bc, LineType::Segment);
                     self.add_auxiliary_line(b_id, m_ca, LineType::Segment);
                     self.add_auxiliary_line(c_id, m_ab, LineType::Segment);
@@ -198,26 +206,28 @@ impl MathFigure {
             TriangleCenterType::Circumcenter => {
                 let o_pos = tri.circumcenter()?;
                 let o_id = self.add_point(o_pos, Some("O".to_string()));
-                if let Some(r) = tri.circumradius() {
-                    let mut circ =
-                        GeomCircle::new_with_radius(CircleId(self.next_circle_id), o_id, r);
-                    self.next_circle_id += 1;
-                    circ.style = LineStyle::Dashed;
-                    self.circles.insert(circ.id, circ);
+                self.derive(o_id, Derivation::Center { kind: center_type, a: a_id, b: b_id, c: c_id });
+                if tri.circumradius().is_some() {
+                    // Through A, so the circle keeps passing through the vertices
+                    let id = self.add_circle_through(o_id, a_id);
+                    self.circles.get_mut(&id).unwrap().style = LineStyle::Dashed;
                 }
                 Some(o_id)
             }
             TriangleCenterType::Orthocenter => {
                 let h_pos = tri.orthocenter()?;
                 let h_id = self.add_point(h_pos, Some("H".to_string()));
+                self.derive(h_id, Derivation::Center { kind: center_type, a: a_id, b: b_id, c: c_id });
                 if add_auxiliary_lines {
                     if let Some(fa) = tri.altitude_foot_a() {
                         let fa_id = self.add_point(fa, None);
+                        self.derive(fa_id, Derivation::Foot { p: a_id, a: b_id, b: c_id });
                         self.add_auxiliary_line(a_id, fa_id, LineType::Segment);
                         self.add_right_angle(fa_id, a_id, c_id, 8.0);
                     }
                     if let Some(fb) = tri.altitude_foot_b() {
                         let fb_id = self.add_point(fb, None);
+                        self.derive(fb_id, Derivation::Foot { p: b_id, a: c_id, b: a_id });
                         self.add_auxiliary_line(b_id, fb_id, LineType::Segment);
                         self.add_right_angle(fb_id, b_id, a_id, 8.0);
                     }
@@ -227,20 +237,25 @@ impl MathFigure {
             TriangleCenterType::Incenter => {
                 let i_pos = tri.incenter()?;
                 let i_id = self.add_point(i_pos, Some("I".to_string()));
-                if let Some(r) = tri.inradius() {
-                    let mut circ =
-                        GeomCircle::new_with_radius(CircleId(self.next_circle_id), i_id, r);
-                    self.next_circle_id += 1;
-                    circ.style = LineStyle::Dashed;
-                    self.circles.insert(circ.id, circ);
+                self.derive(i_id, Derivation::Center { kind: center_type, a: a_id, b: b_id, c: c_id });
+                if tri.inradius().is_some() {
+                    // Through the (hidden) touching point on BC, so the radius follows the triangle
+                    let t = Triangle::new(i_pos, b, c).altitude_foot_a().unwrap_or(i_pos);
+                    let t_id = self.add_point(t, None);
+                    self.points.get_mut(&t_id).unwrap().visible = false;
+                    self.derive(t_id, Derivation::Foot { p: i_id, a: b_id, b: c_id });
+                    let id = self.add_circle_through(i_id, t_id);
+                    self.circles.get_mut(&id).unwrap().style = LineStyle::Dashed;
                 }
                 if add_auxiliary_lines {
                     if let Some(da) = tri.bisector_foot_a() {
                         let da_id = self.add_point(da, None);
+                        self.derive(da_id, Derivation::BisectorFoot { a: a_id, b: b_id, c: c_id });
                         self.add_auxiliary_line(a_id, da_id, LineType::Segment);
                     }
                     if let Some(db) = tri.bisector_foot_b() {
                         let db_id = self.add_point(db, None);
+                        self.derive(db_id, Derivation::BisectorFoot { a: b_id, b: c_id, c: a_id });
                         self.add_auxiliary_line(b_id, db_id, LineType::Segment);
                     }
                 }
@@ -267,6 +282,7 @@ impl MathFigure {
         let mut lines = Vec::new();
         for t_pos in t_points {
             let t_id = self.add_point(t_pos, None);
+            self.derive(t_id, Derivation::Tangent { p: p_id, circle: circle_id });
             let l_id = self.add_segment(p_id, t_id);
             lines.push(l_id);
         }
@@ -365,6 +381,10 @@ impl MathFigure {
         self.add_segment(pc, pd);
         self.add_segment(pd, pa);
 
+        // C and D keep the shape when A or B moves
+        self.derive_affine(pc, pa, pb);
+        self.derive_affine(pd, pa, pb);
+
         self.add_right_angle(pa, pb, pd, 8.0);
         self.add_right_angle(pb, pc, pa, 8.0);
         self.add_right_angle(pc, pd, pb, 8.0);
@@ -399,6 +419,7 @@ impl MathFigure {
 
         let label = foot_label.unwrap_or("H").to_string();
         let foot_id = self.add_point(foot_pos, Some(label));
+        self.derive(foot_id, Derivation::Foot { p: a_id, a: b_id, b: c_id });
         let line_id = self.add_auxiliary_line(a_id, foot_id, LineType::Segment);
         self.add_right_angle(foot_id, a_id, c_id, 8.0);
 
@@ -421,6 +442,7 @@ impl MathFigure {
 
         let label = midpoint_label.unwrap_or("M").to_string();
         let m_id = self.add_point(m_pos, Some(label));
+        self.derive(m_id, Derivation::Midpoint { a: b_id, b: c_id });
         let line_id = self.add_auxiliary_line(a_id, m_id, LineType::Segment);
 
         Some((m_id, line_id))
@@ -442,6 +464,7 @@ impl MathFigure {
 
         let label = foot_label.unwrap_or("D").to_string();
         let d_id = self.add_point(d_pos, Some(label));
+        self.derive(d_id, Derivation::BisectorFoot { a: a_id, b: b_id, c: c_id });
         let line_id = self.add_auxiliary_line(a_id, d_id, LineType::Segment);
 
         Some((d_id, line_id))
@@ -660,6 +683,10 @@ impl MathFigure {
                     if t1 >= -0.01 && t1 <= 1.01 && t2 >= -0.01 && t2 <= 1.01 {
                         if self.find_point_near(inter, tolerance).is_none() {
                             let pt_id = self.add_point(inter, None);
+                            self.derive(
+                                pt_id,
+                                Derivation::LineLine { a: p1_id, b: p2_id, c: q1_id, d: q2_id },
+                            );
                             new_points.push(pt_id);
                         }
                     }
@@ -677,8 +704,8 @@ impl MathFigure {
             })
             .collect();
 
-        for &(_, _, _, p1, p2) in &line_pairs {
-            for &(_, c_pos, radius) in &circles_data {
+        for &(_, a_id, b_id, p1, p2) in &line_pairs {
+            for &(circle, c_pos, radius) in &circles_data {
                 let inters = line_circle_intersection(p1, p2, c_pos, radius);
                 for inter in inters {
                     let d1 = (p2 - p1).length();
@@ -686,6 +713,7 @@ impl MathFigure {
                     if t >= -0.05 && t <= 1.05 {
                         if self.find_point_near(inter, tolerance).is_none() {
                             let pt_id = self.add_point(inter, None);
+                            self.derive(pt_id, Derivation::LineCircle { a: a_id, b: b_id, circle });
                             new_points.push(pt_id);
                         }
                     }
@@ -697,12 +725,13 @@ impl MathFigure {
         let num_circ = circles_data.len();
         for i in 0..num_circ {
             for j in (i + 1)..num_circ {
-                let (_, c1, r1) = circles_data[i];
-                let (_, c2, r2) = circles_data[j];
+                let (id1, c1, r1) = circles_data[i];
+                let (id2, c2, r2) = circles_data[j];
                 let inters = circle_circle_intersection(c1, r1, c2, r2);
                 for inter in inters {
                     if self.find_point_near(inter, tolerance).is_none() {
                         let pt_id = self.add_point(inter, None);
+                        self.derive(pt_id, Derivation::CircleCircle { c1: id1, c2: id2 });
                         new_points.push(pt_id);
                     }
                 }
@@ -809,16 +838,8 @@ impl MathFigure {
             }
         }
 
-        // Update circles through points
-        for circle in self.circles.values_mut() {
-            if let Some(tp_id) = circle.through_point {
-                if let (Some(cp), Some(tp)) =
-                    (self.points.get(&circle.center), self.points.get(&tp_id))
-                {
-                    circle.radius = (tp.pos - cp.pos).length();
-                }
-            }
-        }
+        // Constructed points follow, then the circle radii
+        self.update_derived();
 
         converged
     }

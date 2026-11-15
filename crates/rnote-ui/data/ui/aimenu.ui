@@ -317,7 +317,7 @@
                   <child>
                     <object class="GtkButton" id="pick_point_button">
                       <property name="icon-name">dot-symbolic</property>
-                      <property name="tooltip-text" translatable="yes">Chọn điểm trên bảng: bấm rồi chạm vào một điểm trong 3 giây, tên điểm được chèn vào lệnh</property>
+                      <property name="tooltip-text" translatable="yes">Chọn điểm trên bảng: bấm rồi chạm vào bảng trong 5 giây (giữ và kéo để chỉnh), tên điểm hoặc toạ độ được chèn vào lệnh</property>
                     </object>
                   </child>
                   <child>

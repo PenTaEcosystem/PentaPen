@@ -1,7 +1,8 @@
 //! Drawing more into an existing figure.
 
 use super::MathFigure;
-use super::entity::{PointId, RightAngleMark};
+use super::derive::Derived;
+use super::entity::{CircleId, PointId, RightAngleMark};
 use std::collections::HashMap;
 
 /// Points closer than this are the same point.
@@ -49,6 +50,7 @@ impl MathFigure {
             m.visible = l.visible;
         }
 
+        let mut circle_map: HashMap<CircleId, CircleId> = HashMap::new();
         let mut circles: Vec<_> = other.circles.values().collect();
         circles.sort_by_key(|c| c.id);
         for c in circles {
@@ -56,21 +58,52 @@ impl MathFigure {
                 continue;
             };
             let through = c.through_point.and_then(|t| map.get(&t).copied());
-            let exists = self
+            if let Some(same) = self
                 .circles
                 .values()
-                .any(|m| m.center == center && (m.radius - c.radius).abs() < SAME_POINT);
-            if exists {
+                .find(|m| m.center == center && (m.radius - c.radius).abs() < SAME_POINT)
+            {
+                circle_map.insert(c.id, same.id);
                 continue;
             }
             let new = match through {
                 Some(t) => self.add_circle_through(center, t),
                 None => self.add_circle_radius(center, c.radius),
             };
+            circle_map.insert(c.id, new);
             let m = self.circles.get_mut(&new).unwrap();
             m.radius = c.radius;
             m.style = c.style;
             m.visible = c.visible;
+        }
+
+        // Constructed points keep following, constraints keep holding
+        for d in &other.derived {
+            let Some(&point) = map.get(&d.point) else {
+                continue;
+            };
+            if self.is_derived(point) {
+                continue;
+            }
+            if let Some(how) = d
+                .how
+                .mapped(|p| map.get(&p).copied(), |c| circle_map.get(&c).copied())
+            {
+                self.derived.push(Derived { point, how });
+            }
+        }
+        for c in &other.constraints {
+            let mut c = c.clone();
+            if c.points_mut().into_iter().all(|p| match map.get(p) {
+                Some(&m) => {
+                    *p = m;
+                    true
+                }
+                None => false,
+            }) && !self.constraints.contains(&c)
+            {
+                self.constraints.push(c);
+            }
         }
 
         for ra in &other.right_angles {

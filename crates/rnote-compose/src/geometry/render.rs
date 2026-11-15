@@ -2,7 +2,7 @@
 use super::entity::LineStyle;
 use super::figure::MathFigure;
 use p2d::math::Vector2;
-use piet::{Color, RenderContext, StrokeStyle, Text, TextLayoutBuilder};
+use piet::{Color, RenderContext, StrokeStyle, Text, TextLayout, TextLayoutBuilder};
 
 /// Render a MathFigure onto a Piet RenderContext.
 pub fn draw_math_figure(
@@ -46,34 +46,17 @@ pub fn draw_math_figure(
                 let normal = Vector2::new(-dir.y, dir.x);
                 let tick_len = 5.0;
 
-                match line.tick_marks {
-                    1 => {
-                        let t1 = mid - normal * tick_len;
-                        let t2 = mid + normal * tick_len;
-                        cx.stroke(
-                            kurbo::Line::new(
-                                kurbo::Point::new(t1.x, t1.y),
-                                kurbo::Point::new(t2.x, t2.y),
-                            ),
-                            &stroke_brush,
-                            stroke_width,
-                        );
-                    }
-                    _ => {
-                        for offset in [-2.5, 2.5] {
-                            let center = mid + dir * offset;
-                            let t1 = center - normal * tick_len;
-                            let t2 = center + normal * tick_len;
-                            cx.stroke(
-                                kurbo::Line::new(
-                                    kurbo::Point::new(t1.x, t1.y),
-                                    kurbo::Point::new(t2.x, t2.y),
-                                ),
-                                &stroke_brush,
-                                stroke_width,
-                            );
-                        }
-                    }
+                // "/", "//", "///": equal segments carry the same number of marks
+                let n = line.tick_marks.min(3) as i32;
+                for k in 0..n {
+                    let center = mid + dir * ((k as f64 - (n - 1) as f64 / 2.0) * 5.0);
+                    let t1 = center - normal * tick_len;
+                    let t2 = center + normal * tick_len;
+                    cx.stroke(
+                        kurbo::Line::new(kurbo::Point::new(t1.x, t1.y), kurbo::Point::new(t2.x, t2.y)),
+                        &stroke_brush,
+                        stroke_width,
+                    );
                 }
             }
         }
@@ -120,7 +103,22 @@ pub fn draw_math_figure(
 
     // 4. Draw Points & Labels
     const POINT_DOT_RADIUS: f64 = 3.2;
-    let white_brush = cx.solid_brush(Color::rgba8(255, 255, 255, 245));
+    // The ring around a point stands out from the ink: dark around chalk-white ink, white around dark ink
+    let (r, g, b, _) = stroke_color.as_rgba();
+    let halo = if 0.299 * r + 0.587 * g + 0.114 * b > 0.6 {
+        Color::rgba8(20, 20, 20, 200)
+    } else {
+        Color::rgba8(255, 255, 255, 245)
+    };
+    let white_brush = cx.solid_brush(halo);
+    // Labels go outwards, away from the middle of the figure, so they do not sit on its sides
+    let visible: Vec<Vector2> = figure
+        .points
+        .values()
+        .filter(|p| p.visible)
+        .map(|p| p.pos)
+        .collect();
+    let middle = visible.iter().copied().sum::<Vector2>() / visible.len().max(1) as f64;
     let inter_ring_brush = cx.solid_brush(Color::rgba8(28, 113, 216, 235));
     let inter_fill_brush = cx.solid_brush(Color::rgba8(255, 255, 255, 250));
 
@@ -170,8 +168,13 @@ pub fn draw_math_figure(
                 .text_color(stroke_color.clone())
                 .build()
             {
-                // Offset label slightly upper-right from vertex
-                let label_pos = kurbo::Point::new(pt.pos.x + 6.0, pt.pos.y - 16.0);
+                let dir = (pt.pos - middle)
+                    .try_normalize()
+                    .unwrap_or_else(|| Vector2::new(0.7, -0.7));
+                let size = layout.size();
+                let c = pt.pos + dir * 13.0;
+                let label_pos =
+                    kurbo::Point::new(c.x - size.width * 0.5, c.y - size.height * 0.5);
                 cx.draw_text(&layout, label_pos);
             }
         }

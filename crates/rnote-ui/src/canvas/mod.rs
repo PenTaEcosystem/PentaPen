@@ -518,6 +518,14 @@ mod imp {
                     .borrow()
                     .draw_to_gtk_snapshot(snapshot, obj.bounds())?;
 
+                // Dim the board while a point is being picked, so the red crosshair stands out
+                if obj.is_picking_ai_point() || obj.is_picking_center() {
+                    snapshot.append_color(
+                        &gtk4::gdk::RGBA::new(0.0, 0.0, 0.0, 0.35),
+                        &graphene::Rect::from_p2d_aabb(clip_bounds),
+                    );
+                }
+
                 // pop the clip
                 snapshot.pop();
                 Ok(())
@@ -1058,6 +1066,7 @@ impl RnCanvas {
 
     /// A red crosshair while a point is being picked, the usual cursor otherwise.
     fn update_pick_cursor(&self) {
+        self.queue_draw();
         if self.is_picking_ai_point() || self.is_picking_center() {
             let cursor = gdk::Cursor::from_texture(
                 &gdk::Texture::from_resource(

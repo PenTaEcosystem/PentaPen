@@ -119,8 +119,6 @@ pub fn draw_math_figure(
         .map(|p| p.pos)
         .collect();
     let middle = visible.iter().copied().sum::<Vector2>() / visible.len().max(1) as f64;
-    let inter_ring_brush = cx.solid_brush(Color::rgba8(28, 113, 216, 235));
-    let inter_fill_brush = cx.solid_brush(Color::rgba8(255, 255, 255, 250));
 
     for pt in figure.points.values() {
         if !pt.visible {
@@ -128,25 +126,10 @@ pub fn draw_math_figure(
         }
         let p = kurbo::Point::new(pt.pos.x, pt.pos.y);
 
-        // Count how many segments meet at this point
-        let deg = figure
-            .lines
-            .values()
-            .filter(|l| l.visible && (l.p1 == pt.id || l.p2 == pt.id))
-            .count();
-
-        // Unnamed points or multi-segment crossings pop out prominently as selectable intersection handles
-        let is_intersection = pt.label.is_none() || deg >= 3;
-        if is_intersection {
-            let outer_ring = kurbo::Circle::new(p, 5.8);
-            cx.fill(outer_ring, &inter_fill_brush);
-            cx.stroke(
-                outer_ring,
-                &inter_ring_brush,
-                (stroke_width * 0.85).max(1.8),
-            );
-            let inner_dot = kurbo::Circle::new(p, 2.6);
-            cx.fill(inner_dot, &inter_ring_brush);
+        // Unnamed points (crossings, split points) are small plain dots; the blue handles
+        // only show in the shaper overlay while the figure is selected
+        if pt.label.is_none() {
+            cx.fill(kurbo::Circle::new(p, POINT_DOT_RADIUS * 0.8), &stroke_brush);
         } else {
             let halo = kurbo::Circle::new(p, POINT_DOT_RADIUS + 1.6);
             cx.fill(halo, &white_brush);

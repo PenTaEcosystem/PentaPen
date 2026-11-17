@@ -23,7 +23,12 @@ echo "### binary"
 cp "$prefix/bin/rnote" "$macos/rnote"
 
 echo "### image loaders"
-cp "$brew_prefix"/lib/gdk-pixbuf-2.0/2.10.0/loaders/*.so "$loaders/"
+brew_loaders="$brew_prefix/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+cp "$brew_loaders"/*.so "$loaders/"
+# Query the Homebrew copies (the bundled ones only load from inside the app) and point the paths
+# into the app; loader paths must be absolute, so the launcher fills in where the app actually is
+gdk-pixbuf-query-loaders "$brew_loaders"/*.so     | sed "s|$brew_loaders|@APP@/Contents/Frameworks/gdk-pixbuf-2.0/2.10.0/loaders|g"     > "$res/etc/loaders.cache.in"
+grep -q "@APP@" "$res/etc/loaders.cache.in"
 
 echo "### libraries"
 fix_args=(-x "$macos/rnote")
@@ -31,6 +36,20 @@ for so in "$loaders"/*.so; do fix_args+=(-x "$so"); done
 dylibbundler -of -b "${fix_args[@]}" \
     -d "$frameworks" -p @executable_path/../Frameworks/ \
     -s "$brew_prefix/lib"
+for so in "$loaders"/*.so; do
+    install_name_tool -id "@executable_path/../Frameworks/gdk-pixbuf-2.0/2.10.0/loaders/$(basename "$so")" "$so"
+done
+
+# dyld refuses a library that lists the same LC_RPATH twice, which dylibbundler can leave behind
+rpaths() { otool -l "$1" | awk '/cmd LC_RPATH/{r=1} r&&/ path /{print $2; r=0}'; }
+while IFS= read -r -d '' f; do
+    file "$f" | grep -q Mach-O || continue
+    rpaths "$f" | sort | uniq -d | while IFS= read -r dup; do
+        while [ "$(rpaths "$f" | grep -cxF "$dup")" -gt 1 ]; do
+            install_name_tool -delete_rpath "$dup" "$f"
+        done
+    done
+done < <(find "$macos" "$frameworks" -type f -print0)
 
 echo "### data"
 cp -R "$prefix/share/." "$res/share/"
@@ -42,9 +61,6 @@ glib-compile-schemas "$res/share/glib-2.0/schemas"
 for theme in "$res/share/icons/Adwaita" "$res/share/icons/hicolor"; do
     gtk4-update-icon-cache -q -t -f "$theme" || true
 done
-
-# Loader paths must be absolute: the launcher fills in where the app actually is
-gdk-pixbuf-query-loaders "$loaders"/*.so | sed "s|$app|@APP@|g" > "$res/etc/loaders.cache.in"
 
 echo "### launcher"
 cat > "$macos/PentaPen" <<'LAUNCHER'
@@ -93,6 +109,10 @@ while IFS= read -r -d '' f; do
     if file "$f" | grep -q Mach-O && otool -L "$f" | tail -n +2 | grep -q "$brew_prefix"; then
         echo "still links to Homebrew: $f"
         otool -L "$f" | grep "$brew_prefix"
+        leftover=1
+    fi
+    if file "$f" | grep -q Mach-O && [ -n "$(rpaths "$f" | sort | uniq -d)" ]; then
+        echo "duplicate LC_RPATH: $f"
         leftover=1
     fi
 done < <(find "$macos" "$frameworks" -type f -print0)

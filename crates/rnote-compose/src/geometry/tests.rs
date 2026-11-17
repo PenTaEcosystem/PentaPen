@@ -358,7 +358,11 @@ fn right_triangle_centers_do_not_stack_points() {
     let pts: Vec<_> = f.points.values().filter(|p| p.visible).collect();
     for (i, p) in pts.iter().enumerate() {
         for q in &pts[i + 1..] {
-            assert!((p.pos - q.pos).length() > 0.5, "stacked points at {:?}", p.pos);
+            assert!(
+                (p.pos - q.pos).length() > 0.5,
+                "stacked points at {:?}",
+                p.pos
+            );
         }
     }
     assert_eq!(f.points[&a].label.as_deref(), Some("H"));

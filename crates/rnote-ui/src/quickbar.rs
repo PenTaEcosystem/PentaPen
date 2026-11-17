@@ -276,11 +276,9 @@ fn graph_button(appwindow: &RnAppWindow) -> MenuButton {
             let Some(canvas) = appwindow.active_tab_canvas() else {
                 return;
             };
-            let f = match Function::parse(&entry.text()).and_then(|f| {
-                match domain.text().trim() {
-                    "" => Ok(f),
-                    d => rnote_engine::graph::parse_domain(d).map(|(a, b)| f.with_domain(a, b)),
-                }
+            let f = match Function::parse(&entry.text()).and_then(|f| match domain.text().trim() {
+                "" => Ok(f),
+                d => rnote_engine::graph::parse_domain(d).map(|(a, b)| f.with_domain(a, b)),
             }) {
                 Ok(f) => f,
                 Err(e) => {

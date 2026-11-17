@@ -413,7 +413,12 @@ fn remove_elements(fig: &mut MathFigure, geom: &GeometryJson) -> bool {
         .lines
         .values()
         .flat_map(|l| [l.p1, l.p2])
-        .chain(fig.circles.values().flat_map(|c| [Some(c.center), c.through_point]).flatten())
+        .chain(
+            fig.circles
+                .values()
+                .flat_map(|c| [Some(c.center), c.through_point])
+                .flatten(),
+        )
         .collect();
     if (fig.lines.len(), fig.circles.len()) != (before.1, before.2) || fig.points.len() != before.0
     {
@@ -1578,7 +1583,9 @@ impl RnAiMenu {
                 glib::timeout_future(std::time::Duration::from_millis(40)).await;
                 let mut slot = slot.borrow_mut();
                 // Finished early (the user started doing something), or a newer drawing took over
-                let Some((c, anim)) = slot.as_mut() else { break };
+                let Some((c, anim)) = slot.as_mut() else {
+                    break;
+                };
                 if *c != canvas {
                     break;
                 }
@@ -1662,8 +1669,16 @@ impl RnAiMenu {
         } else {
             format!(
                 "{existing_desc}. Existing lines: {}. Existing circles: {}",
-                if lines.is_empty() { "none".to_string() } else { lines.join(", ") },
-                if circles.is_empty() { "none".to_string() } else { circles.join(", ") },
+                if lines.is_empty() {
+                    "none".to_string()
+                } else {
+                    lines.join(", ")
+                },
+                if circles.is_empty() {
+                    "none".to_string()
+                } else {
+                    circles.join(", ")
+                },
             )
         };
         let user = if let Some((_, _, ref shape_ctx, _)) = selected_target {
@@ -1740,7 +1755,12 @@ impl RnAiMenu {
                 let canvas = this.appwindow()?.active_tab_canvas()?;
                 let engine = canvas.engine_ref();
                 let key = engine.figure_with_points(&names)?;
-                Some((key, anchor, String::new(), engine.stroke_as_math_figure(key)?))
+                Some((
+                    key,
+                    anchor,
+                    String::new(),
+                    engine.stroke_as_math_figure(key)?,
+                ))
             });
             // Everything the reply adds, replayed stroke by stroke at the end
             let mut drawn = Vec::new();

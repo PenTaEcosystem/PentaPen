@@ -53,7 +53,10 @@ pub fn draw_math_figure(
                     let t1 = center - normal * tick_len;
                     let t2 = center + normal * tick_len;
                     cx.stroke(
-                        kurbo::Line::new(kurbo::Point::new(t1.x, t1.y), kurbo::Point::new(t2.x, t2.y)),
+                        kurbo::Line::new(
+                            kurbo::Point::new(t1.x, t1.y),
+                            kurbo::Point::new(t2.x, t2.y),
+                        ),
                         &stroke_brush,
                         stroke_width,
                     );
@@ -156,8 +159,7 @@ pub fn draw_math_figure(
                     .unwrap_or_else(|| Vector2::new(0.7, -0.7));
                 let size = layout.size();
                 let c = pt.pos + dir * 13.0;
-                let label_pos =
-                    kurbo::Point::new(c.x - size.width * 0.5, c.y - size.height * 0.5);
+                let label_pos = kurbo::Point::new(c.x - size.width * 0.5, c.y - size.height * 0.5);
                 cx.draw_text(&layout, label_pos);
             }
         }

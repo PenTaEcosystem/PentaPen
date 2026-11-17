@@ -33,7 +33,12 @@ pub enum Derivation {
         c: PointId,
     },
     /// a + u·(b − a) + v·(b − a) turned 90°: keeps a shape similar (square, regular polygon...)
-    Affine { a: PointId, b: PointId, u: f64, v: f64 },
+    Affine {
+        a: PointId,
+        b: PointId,
+        u: f64,
+        v: f64,
+    },
     /// Intersection of lines AB and CD
     LineLine {
         a: PointId,
@@ -96,7 +101,10 @@ impl Derivation {
         circ: impl Fn(CircleId) -> Option<CircleId>,
     ) -> Option<Self> {
         Some(match *self {
-            Self::Midpoint { a, b } => Self::Midpoint { a: pt(a)?, b: pt(b)? },
+            Self::Midpoint { a, b } => Self::Midpoint {
+                a: pt(a)?,
+                b: pt(b)?,
+            },
             Self::Foot { p, a, b } => Self::Foot {
                 p: pt(p)?,
                 a: pt(a)?,

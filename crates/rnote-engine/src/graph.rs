@@ -106,7 +106,10 @@ pub fn parse_number(s: &str) -> Result<f64, String> {
 
 /// An interval typed as `[a; b]`, `a; b` or `[-pi, pi]`.
 pub fn parse_domain(s: &str) -> Result<(f64, f64), String> {
-    let inner = s.trim().trim_start_matches(['[', '(']).trim_end_matches([']', ')']);
+    let inner = s
+        .trim()
+        .trim_start_matches(['[', '('])
+        .trim_end_matches([']', ')']);
     // ";" separates when present, so "0,5; 2" keeps its decimal comma
     let parts: Vec<&str> = if inner.contains(';') {
         inner.split(';').collect()

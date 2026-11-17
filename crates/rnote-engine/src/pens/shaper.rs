@@ -2,12 +2,12 @@
 use super::PenBehaviour;
 use super::PenStyle;
 use crate::engine::{EngineView, EngineViewMut, StrokeContent};
-use futures::channel::oneshot;
 use crate::pens::pensconfig::ShaperConfig;
 use crate::store::StrokeKey;
 use crate::strokes::ShapeStroke;
 use crate::strokes::Stroke;
 use crate::{DrawableOnDoc, WidgetFlags};
+use futures::channel::oneshot;
 use p2d::bounding_volume::Aabb;
 use p2d::math::Vector2;
 use piet::RenderContext;
@@ -383,11 +383,9 @@ impl PenBehaviour for Shaper {
         engine_view: &EngineView,
     ) -> oneshot::Receiver<anyhow::Result<(Vec<(Vec<u8>, String)>, WidgetFlags)>> {
         let content = match &self.state {
-            ShaperState::Manipulating { selected, .. } => Some(
-                engine_view
-                    .store
-                    .fetch_stroke_content(&[selected.key]),
-            ),
+            ShaperState::Manipulating { selected, .. } => {
+                Some(engine_view.store.fetch_stroke_content(&[selected.key]))
+            }
             _ => None,
         };
         clipboard_content(content, WidgetFlags::default())
@@ -1776,7 +1774,10 @@ fn clipboard_content(
                     let png = svg
                         .gen_image(crate::Engine::STROKE_EXPORT_IMAGE_SCALE)?
                         .into_encoded_bytes(image::ImageFormat::Png, None)?;
-                    out.push((svg.to_document().into_bytes(), crate::Svg::MIME_TYPE.to_string()));
+                    out.push((
+                        svg.to_document().into_bytes(),
+                        crate::Svg::MIME_TYPE.to_string(),
+                    ));
                     out.push((png, String::from("image/png")));
                 }
             }
@@ -2331,7 +2332,11 @@ mod tests {
         let (key, line) = engine
             .figure_segment_at(Vector2::new(40.0, 3.0), 5.0)
             .unwrap();
-        assert!(engine.figure_segment_at(Vector2::new(40.0, 30.0), 5.0).is_none());
+        assert!(
+            engine
+                .figure_segment_at(Vector2::new(40.0, 30.0), 5.0)
+                .is_none()
+        );
 
         let _ = engine.split_segment(key, line, 4);
         let fig = figure_of(&engine.store, key).unwrap().clone();

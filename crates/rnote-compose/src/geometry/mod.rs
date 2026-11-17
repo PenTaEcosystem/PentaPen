@@ -5,12 +5,12 @@ pub mod construction;
 pub mod derive;
 /// Frames of a figure being drawn element by element
 mod drawing;
-/// Drawing more into an existing figure
-mod merge;
 /// Geometric entity representations (Points, Lines, Circles, Marks)
 pub mod entity;
 /// Mathematical figures with dynamic entities and constraints
 pub mod figure;
+/// Drawing more into an existing figure
+mod merge;
 /// Specialized mathematical rendering using Piet
 pub mod render;
 /// 2D non-linear geometric constraint solver

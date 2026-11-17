@@ -54,7 +54,8 @@ done < <(find "$macos" "$frameworks" "$res/lib" -type f -print0)
 echo "### data"
 cp -R "$prefix/share/." "$res/share/"
 mkdir -p "$res/share/icons/hicolor" "$res/share/glib-2.0/schemas"
-cp -R "$brew_prefix/share/icons/Adwaita" "$res/share/icons/"
+# From the package itself: $brew_prefix/share holds links into the Cellar, not the files
+cp -R "$(brew --prefix adwaita-icon-theme)/share/icons/Adwaita" "$res/share/icons/"
 cp "$brew_prefix/share/icons/hicolor/index.theme" "$res/share/icons/hicolor/"
 # Links that point nowhere outside Homebrew would still be listed in the icon cache
 find -L "$res/share" -type l -print0 | while IFS= read -r -d '' link; do

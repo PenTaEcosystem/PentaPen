@@ -83,7 +83,8 @@ jobs:
             echo "app exited early"
             status=1
           fi
-          cat app.log | tail -50
+          tail -50 app.log
+          if grep -q "Failed to load icon" app.log; then echo "missing icons"; status=1; fi
           sleep 2
           hdiutil detach /Volumes/pentapen || hdiutil detach -force /Volumes/pentapen
           exit $status

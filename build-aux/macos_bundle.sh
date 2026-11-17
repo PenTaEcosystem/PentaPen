@@ -57,7 +57,10 @@ mkdir -p "$res/share/icons/hicolor" "$res/share/glib-2.0/schemas"
 cp -R "$brew_prefix/share/icons/Adwaita" "$res/share/icons/"
 cp "$brew_prefix/share/icons/hicolor/index.theme" "$res/share/icons/hicolor/"
 # Links that point nowhere outside Homebrew would still be listed in the icon cache
-find -L "$res/share" -type l -print -delete
+find -L "$res/share" -type l -print0 | while IFS= read -r -d '' link; do
+    echo "drop broken link: $link"
+    rm -f "$link"
+done
 cp "$brew_prefix"/share/glib-2.0/schemas/org.gtk.*.xml "$res/share/glib-2.0/schemas/"
 glib-compile-schemas "$res/share/glib-2.0/schemas"
 for theme in "$res/share/icons/Adwaita" "$res/share/icons/hicolor"; do

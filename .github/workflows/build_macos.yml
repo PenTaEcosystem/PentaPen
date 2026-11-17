@@ -10,12 +10,12 @@ name: Build macOS App
 jobs:
   build:
     # Apple Silicon; libraries come from Homebrew bottles for this macOS version, which is the oldest it runs on
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       # needed for uploading release artifact
       contents: write
     env:
-      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
     steps:

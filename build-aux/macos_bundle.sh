@@ -81,7 +81,7 @@ cat > "$contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$version</string>
     <key>CFBundleVersion</key><string>$version</string>
-    <key>LSMinimumSystemVersion</key><string>${MACOSX_DEPLOYMENT_TARGET:-14.0}</string>
+    <key>LSMinimumSystemVersion</key><string>${MACOSX_DEPLOYMENT_TARGET:-15.0}</string>
     <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>

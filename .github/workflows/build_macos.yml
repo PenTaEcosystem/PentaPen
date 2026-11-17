@@ -26,7 +26,7 @@ jobs:
         run: |
           brew update
           brew install meson ninja pkgconf cmake gettext gtk4 libadwaita appstream \
-            desktop-file-utils adwaita-icon-theme librsvg dylibbundler
+            desktop-file-utils shared-mime-info adwaita-icon-theme librsvg dylibbundler
 
       - name: Install rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
@@ -40,10 +40,27 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "dmg=PentaPen-$version-macos-arm64.dmg" >> "$GITHUB_OUTPUT"
 
+      - name: Restore cargo cache
+        uses: actions/cache/restore@v5
+        with:
+          path: _mesonbuild/target/
+          key: cargo-macos-${{ github.sha }}
+          restore-keys: cargo-macos-
+
       - name: Build
         run: |
           meson setup --prefix="$PWD/_install" -Dprofile=default -Dcli=false -Dci=true _mesonbuild
           meson compile ui-cargo-build -C _mesonbuild
+
+      # Saved even when a later step fails, so the next try does not compile everything again
+      - name: Save cargo cache
+        uses: actions/cache/save@v5
+        with:
+          path: _mesonbuild/target/
+          key: cargo-macos-${{ github.sha }}
+
+      - name: Install
+        run: |
           meson compile rnote-gmo -C _mesonbuild
           meson install -C _mesonbuild
 

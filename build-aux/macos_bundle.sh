@@ -16,7 +16,7 @@ contents="$app/Contents"
 macos="$contents/MacOS"
 frameworks="$contents/Frameworks"
 res="$contents/Resources"
-loaders="$frameworks/gdk-pixbuf-2.0/2.10.0/loaders"
+loaders="$res/lib/gdk-pixbuf-2.0/2.10.0/loaders"
 mkdir -p "$macos" "$frameworks" "$res/share" "$res/etc" "$loaders"
 
 echo "### binary"
@@ -27,7 +27,7 @@ brew_loaders="$brew_prefix/lib/gdk-pixbuf-2.0/2.10.0/loaders"
 cp "$brew_loaders"/*.so "$loaders/"
 # Query the Homebrew copies (the bundled ones only load from inside the app) and point the paths
 # into the app; loader paths must be absolute, so the launcher fills in where the app actually is
-gdk-pixbuf-query-loaders "$brew_loaders"/*.so     | sed "s|$brew_loaders|@APP@/Contents/Frameworks/gdk-pixbuf-2.0/2.10.0/loaders|g"     > "$res/etc/loaders.cache.in"
+gdk-pixbuf-query-loaders "$brew_loaders"/*.so     | sed "s|$brew_loaders|@APP@/Contents/Resources/lib/gdk-pixbuf-2.0/2.10.0/loaders|g"     > "$res/etc/loaders.cache.in"
 grep -q "@APP@" "$res/etc/loaders.cache.in"
 
 echo "### libraries"
@@ -37,7 +37,7 @@ dylibbundler -of -b "${fix_args[@]}" \
     -d "$frameworks" -p @executable_path/../Frameworks/ \
     -s "$brew_prefix/lib"
 for so in "$loaders"/*.so; do
-    install_name_tool -id "@executable_path/../Frameworks/gdk-pixbuf-2.0/2.10.0/loaders/$(basename "$so")" "$so"
+    install_name_tool -id "@executable_path/../Resources/lib/gdk-pixbuf-2.0/2.10.0/loaders/$(basename "$so")" "$so"
 done
 
 # dyld refuses a library that lists the same LC_RPATH twice, which dylibbundler can leave behind
@@ -49,7 +49,7 @@ while IFS= read -r -d '' f; do
             install_name_tool -delete_rpath "$dup" "$f"
         done
     done
-done < <(find "$macos" "$frameworks" -type f -print0)
+done < <(find "$macos" "$frameworks" "$res/lib" -type f -print0)
 
 echo "### data"
 cp -R "$prefix/share/." "$res/share/"
@@ -115,12 +115,16 @@ while IFS= read -r -d '' f; do
         echo "duplicate LC_RPATH: $f"
         leftover=1
     fi
-done < <(find "$macos" "$frameworks" -type f -print0)
+done < <(find "$macos" "$frameworks" "$res/lib" -type f -print0)
 [ "$leftover" = 0 ]
 
 echo "### ad-hoc signature (Apple Silicon refuses unsigned code)"
-codesign --force --deep --sign - "$app"
-codesign --verify --deep --strict "$app"
+# Each library on its own, then the app (--deep would treat the loader folders as bundles)
+while IFS= read -r -d '' f; do
+    if file "$f" | grep -q Mach-O; then codesign --force --sign - "$f"; fi
+done < <(find "$frameworks" "$res/lib" "$macos/rnote" -type f -print0)
+codesign --force --sign - "$app"
+codesign --verify --deep "$app"
 
 echo "### dmg"
 stage="$work/dmg"

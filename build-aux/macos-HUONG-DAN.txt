@@ -1,0 +1,29 @@
+PentaPen cho macOS (máy Mac chip Apple M1/M2/M3/M4, macOS 14 Sonoma trở lên)
+
+CÀI ĐẶT
+1. Kéo PentaPen.app vào thư mục Applications (biểu tượng bên cạnh).
+2. Đẩy đĩa "PentaPen" ra (Eject).
+
+MỞ LẦN ĐẦU
+Bản này chưa được Apple ký (không có tài khoản Apple Developer), nên lần đầu macOS
+sẽ chặn và báo "Apple không thể kiểm tra..." hoặc "không xác định được nhà phát triển".
+Chỉ cần mở thủ công một lần, các lần sau mở bình thường.
+
+Cách 1 (macOS 15 Sequoia trở lên):
+  - Nhấp đúp PentaPen trong Applications, bấm "Xong" (Done) khi bị chặn.
+  - Mở Cài đặt hệ thống (System Settings) > Quyền riêng tư & Bảo mật (Privacy & Security).
+  - Kéo xuống dưới, bấm "Vẫn mở" (Open Anyway) cạnh dòng nói về PentaPen, nhập mật khẩu máy.
+  - Bấm "Mở" (Open) ở hộp thoại hiện ra.
+
+Cách 2 (macOS 14 Sonoma):
+  - Trong Applications, nhấp chuột phải (hoặc Control + nhấp) vào PentaPen > Mở (Open).
+  - Bấm "Mở" (Open) ở hộp thoại hiện ra.
+
+Cách 3 (nếu macOS báo "PentaPen bị hỏng" hoặc hai cách trên không được):
+  - Mở ứng dụng Terminal, dán lệnh sau rồi nhấn Enter:
+        xattr -cr /Applications/PentaPen.app
+  - Sau đó nhấp đúp PentaPen để mở.
+
+LƯU Ý
+- Máy Mac chip Intel chưa được hỗ trợ.
+- Trợ lý AI dùng lệnh curl có sẵn trong macOS, không cần cài thêm.

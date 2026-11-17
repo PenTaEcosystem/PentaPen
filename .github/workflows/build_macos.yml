@@ -1,0 +1,85 @@
+---
+
+name: Build macOS App
+
+"on":
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Apple Silicon; libraries come from Homebrew bottles for this macOS version, which is the oldest it runs on
+    runs-on: macos-14
+    permissions:
+      # needed for uploading release artifact
+      contents: write
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          brew update
+          brew install meson ninja pkgconf cmake gettext gtk4 libadwaita appstream \
+            desktop-file-utils adwaita-icon-theme librsvg dylibbundler
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: "1.99"
+
+      - name: Set names
+        id: names
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "dmg=PentaPen-$version-macos-arm64.dmg" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: |
+          meson setup --prefix="$PWD/_install" -Dprofile=default -Dcli=false -Dci=true _mesonbuild
+          meson compile ui-cargo-build -C _mesonbuild
+          meson compile rnote-gmo -C _mesonbuild
+          meson install -C _mesonbuild
+
+      - name: Bundle
+        run: |
+          bash build-aux/macos_bundle.sh "$PWD/_install" "${{ steps.names.outputs.version }}" \
+            "$PWD/${{ steps.names.outputs.dmg }}"
+
+      - name: Smoke test (the app from the dmg starts and stays up)
+        run: |
+          hdiutil attach -nobrowse -mountpoint /Volumes/pentapen "${{ steps.names.outputs.dmg }}"
+          /Volumes/pentapen/PentaPen.app/Contents/MacOS/PentaPen > app.log 2>&1 &
+          pid=$!
+          sleep 25
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "app is running"
+            kill "$pid"
+            status=0
+          else
+            echo "app exited early"
+            status=1
+          fi
+          cat app.log | tail -50
+          sleep 2
+          hdiutil detach /Volumes/pentapen || hdiutil detach -force /Volumes/pentapen
+          exit $status
+
+      - name: Upload app (workflow artifact)
+        uses: actions/upload-artifact@v7
+        with:
+          name: pentapen-macos-arm64
+          path: ${{ steps.names.outputs.dmg }}
+          if-no-files-found: error
+
+      - name: Upload app (release asset)
+        if: ${{ github.event_name == 'release' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} ${{ steps.names.outputs.dmg }}

@@ -134,10 +134,13 @@ pub(crate) fn setup_env() -> anyhow::Result<()> {
             // SAFETY: this setup only happens while still being single-threaded
             unsafe {
                 std::env::set_var("XDG_DATA_DIRS", data_dir);
-                std::env::set_var(
-                    "GDK_PIXBUF_MODULE_FILE",
-                    resources_dir.join("etc/loaders.cache"),
-                );
+                // The bundle's launcher writes a loaders.cache with this install's absolute paths
+                if std::env::var_os("GDK_PIXBUF_MODULE_FILE").is_none() {
+                    std::env::set_var(
+                        "GDK_PIXBUF_MODULE_FILE",
+                        resources_dir.join("etc/loaders.cache"),
+                    );
+                }
             }
         }
     }
